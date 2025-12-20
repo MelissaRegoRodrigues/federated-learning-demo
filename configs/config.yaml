@@ -1,0 +1,14 @@
+experiment_name: "shapley_fl_non_iid"
+federated_params:
+  num_clients: 2
+  rounds: 3
+  alpha: 0.5  # Controls Non-IID intensity (lower = more heterogeneous)
+  
+model_params:
+  batch_size: 32
+  learning_rate: 0.01
+  architecture: "SimpleCNN"
+
+game_theory:
+  mechanism: "ShapleyValue"
+  approximation_samples: 100 # For Monte Carlo Shapley
