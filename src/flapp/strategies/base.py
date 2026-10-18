@@ -1,89 +1,125 @@
-"""Scaffolding shared by ShapleyWeightedStrategy and StackelbergStrategy:
-both need a fresh SimpleCNN's initial parameters, both invite ALL clients
-every round, both are evaluated only via a centralized test set (never
-Flower's federated/client-side evaluate), and both need a place to log
-their round's results. Only aggregate_fit() differs between them, so
-that's the only method left abstract here.
-
-FedAvg does NOT use this base — flwr.server.strategy.FedAvg already
-implements all of this correctly and is used unmodified; only its
-evaluate() gets a thin logging wrapper (see strategies/fedavg.py)."""
-from abc import abstractmethod
-from pathlib import Path
-from typing import Any
-
 import numpy as np
-from flwr.common import FitIns, Parameters, ndarrays_to_parameters, parameters_to_ndarrays
-from flwr.server.client_manager import ClientManager
+from flwr.common import FitIns, ndarrays_to_parameters, parameters_to_ndarrays
 from flwr.server.strategy import Strategy
 
 from flapp.strategies.logging_utils import log_round
 from flapp.task import SimpleCNN, get_params
 
 
-def average_ndarrays(param_lists: list[list]) -> list:
-    """Element-wise mean across clients — the same math FedAvg uses,
-    exposed here as a plain function since Shapley needs it repeatedly
-    (once per leave-one-out coalition) and Stackelberg needs it once
-    (over whichever clients pass the reputation/price gates)."""
-    return [np.mean(np.stack(layer), axis=0) for layer in zip(*param_lists)]
-
-
-def weighted_average_ndarrays(updates: dict, weights: dict) -> list:
-    """Shapley-only: unlike FedAvg's fixed 1/n, each client's weight here
-    reflects its (shifted, normalized) Shapley value — callers are
-    responsible for ensuring weights sum to 1 (see shapley.py)."""
-    num_layers = len(next(iter(updates.values())))
+def average_ndarrays(param_lists):
     result = []
-    for layer_idx in range(num_layers):
-        weighted_sum = sum(weights[cid] * updates[cid][layer_idx] for cid in updates)
+    num_layers = len(param_lists[0])
+    for layer_index in range(num_layers):
+        layers = []
+        for params in param_lists:
+            layers.append(params[layer_index])
+        result.append(np.mean(np.stack(layers), axis=0))
+    return result
+
+
+def weighted_average_ndarrays(updates, weights):
+    first_client = next(iter(updates))
+    num_layers = len(updates[first_client])
+    result = []
+    for layer_index in range(num_layers):
+        weighted_sum = 0
+        for client_id in updates:
+            weighted_sum = weighted_sum + weights[client_id] * updates[client_id][layer_index]
         result.append(np.asarray(weighted_sum))
     return result
+
+
+def partition_id_of(result):
+    client, fit_res = result
+    return fit_res.metrics["partition_id"]
+
+
+def sort_by_partition_id(results):
+    return sorted(results, key=partition_id_of)
+
+
+def updates_by_partition(results):
+    updates = {}
+    for client, fit_res in sort_by_partition_id(results):
+        updates[fit_res.metrics["partition_id"]] = parameters_to_ndarrays(fit_res.parameters)
+    return updates
+
+
+def sample_sizes_by_partition(results):
+    sizes = {}
+    for client, fit_res in sort_by_partition_id(results):
+        sizes[fit_res.metrics["partition_id"]] = fit_res.num_examples
+    return sizes
+
+
+def scores_as_strings(scores):
+    result = {}
+    for client_id, value in scores.items():
+        result[str(client_id)] = float(value)
+    return result
+
+
+def fit_config(server_round):
+    return {"server_round": server_round}
+
+
+def fail_if_clients_missing(server_round, failures):
+    if failures:
+        raise RuntimeError(
+            f"Round {server_round}: {len(failures)} client(s) failed "
+            f"(often Ray killing a worker for low memory). Aborting run."
+        )
 
 
 class CentralEvalStrategy(Strategy):
     def __init__(
         self,
         *,
-        strategy_name: str,
+        strategy_name,
         evaluate_fn,
-        results_path: Path | None,
-        num_clients: int,
-        num_free_riders: int,
-    ) -> None:
+        results_path,
+        num_clients,
+        num_free_riders,
+        initial_parameters=None,
+    ):
         self.strategy_name = strategy_name
         self.evaluate_fn = evaluate_fn
         self.results_path = results_path
         self.num_clients = num_clients
         self.num_free_riders = num_free_riders
+        self.initial_parameters = initial_parameters
+        self.current_global = None
 
-    def initialize_parameters(self, client_manager: ClientManager) -> Parameters | None:
+    def initialize_parameters(self, client_manager):
+        if self.initial_parameters is not None:
+            return self.initial_parameters
         return ndarrays_to_parameters(get_params(SimpleCNN()))
 
-    def configure_fit(self, server_round, parameters, client_manager: ClientManager):
-        clients = client_manager.sample(
-            num_clients=self.num_clients, min_num_clients=self.num_clients
-        )
-        return [(client, FitIns(parameters, {})) for client in clients]
+    def configure_fit(self, server_round, parameters, client_manager):
+        self.current_global = parameters_to_ndarrays(parameters)
+        clients = client_manager.sample(num_clients=self.num_clients, min_num_clients=self.num_clients)
+        instructions = []
+        for client in clients:
+            instructions.append((client, FitIns(parameters, fit_config(server_round))))
+        return instructions
 
-    def configure_evaluate(self, server_round, parameters, client_manager: ClientManager):
-        # Centralized evaluation only (see evaluate() below) — no
-        # client-side federated evaluate round is needed for this thesis.
+    def configure_evaluate(self, server_round, parameters, client_manager):
         return []
 
     def aggregate_evaluate(self, server_round, results, failures):
         return None, {}
 
-    def evaluate(self, server_round: int, parameters: Parameters):
+    def evaluate(self, server_round, parameters):
         result = self.evaluate_fn(server_round, parameters_to_ndarrays(parameters), {})
         if result is None:
             return None
+
         loss, metrics = result
         if self.results_path is not None:
             log_round(
                 self.results_path,
                 server_round,
-                metrics.get("accuracy"),
+                metrics,
                 self.num_clients,
                 self.num_free_riders,
                 self.strategy_name,
@@ -91,12 +127,5 @@ class CentralEvalStrategy(Strategy):
             )
         return loss, metrics
 
-    def _round_extra(self) -> dict[str, Any]:
-        """Subclasses override: aggregate_fit() runs before evaluate() each
-        round, so it can stash this round's client_scores/
-        detected_free_riders/metadata on self for evaluate() to log."""
+    def _round_extra(self):
         return {}
-
-    @abstractmethod
-    def aggregate_fit(self, server_round, results, failures):
-        ...

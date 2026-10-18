@@ -1,10 +1,6 @@
-"""Reads the three strategies' result JSONs (produced independently by
-three separate `python scripts/run_experiment.py --strategy ...` runs)
-and plots them together. No Flower import here — this mirrors how
-Flower-based simulation research is actually done: independent runs,
-compared offline."""
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -12,22 +8,84 @@ import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from flapp.equity import reward_equity_index
+from flapp.aggregate import aggregate_cumulative_reward_distance, aggregate_detection_rate, aggregate_metric
+from flapp.fairness import reference_shares
+from flapp.task import load_partition_dataset
+
+COLORS = {"fedavg": "#ff7f0e", "shapley": "#2ca02c", "stackelberg": "#1f77b4"}
 
 
-def load_results(path: Path) -> dict:
-    return json.loads(path.read_text())
+def load_results(path):
+    with open(path) as file:
+        return json.load(file)
 
 
-def plot_convergence(results_by_strategy: dict[str, dict], output_path: Path) -> None:
+def seed_from_path(path):
+    match = re.search(r"seed(\d+)", path.name)
+    return int(match.group(1))
+
+
+def reference_for_run(run, alpha):
+    num_clients = run["num_clients"]
+    sizes = {}
+    for client_id in range(num_clients):
+        sizes[client_id] = len(load_partition_dataset(client_id, num_clients, alpha, run["seed"]))
+    return reference_shares(sizes, run["num_free_riders"])
+
+
+def group_by_strategy(result_paths):
+    runs_by_strategy = {}
+    for path in result_paths:
+        data = load_results(path)
+        data["seed"] = seed_from_path(path)
+        strategy = data["strategy"]
+        if strategy not in runs_by_strategy:
+            runs_by_strategy[strategy] = []
+        runs_by_strategy[strategy].append(data)
+    return runs_by_strategy
+
+
+def plot_band(axis, rounds, means, stds, label, color):
+    lower = []
+    upper = []
+    for mean, std in zip(means, stds):
+        lower.append(mean - std)
+        upper.append(mean + std)
+    axis.plot(rounds, means, marker="o", label=label, color=color)
+    axis.fill_between(rounds, lower, upper, color=color, alpha=0.2)
+
+
+def plot_each_seed(axis, runs, metric_name, label, color):
+    first_line = True
+    for run in runs:
+        rounds = [row["round"] for row in run["rounds"]]
+        values = [row[metric_name] for row in run["rounds"]]
+        if first_line:
+            axis.plot(rounds, values, color=color, alpha=0.6, label=label + " (cada semente)")
+            first_line = False
+        else:
+            axis.plot(rounds, values, color=color, alpha=0.6)
+
+
+def plot_metric(axis, runs_by_strategy, metric_name):
+    for strategy, runs in runs_by_strategy.items():
+        color = COLORS.get(strategy)
+        if strategy == "fedavg":
+            plot_each_seed(axis, runs, metric_name, strategy, color)
+            continue
+        rounds, means, stds = aggregate_metric(runs, metric_name)
+        if rounds:
+            plot_band(axis, rounds, means, stds, strategy, color)
+
+
+def plot_convergence(runs_by_strategy, output_path):
     plt.figure(figsize=(10, 6))
-    for strategy_name, data in results_by_strategy.items():
-        rounds = [r["round"] for r in data["rounds"]]
-        accuracies = [r["accuracy"] for r in data["rounds"]]
-        plt.plot(rounds, accuracies, marker="o", label=strategy_name)
+    axis = plt.gca()
+    plot_metric(axis, runs_by_strategy, "accuracy")
     plt.xlabel("Round")
     plt.ylabel("Global accuracy (centralized test set)")
-    plt.title("FedAvg vs. Shapley-Weighted vs. Stackelberg")
+    plt.ylim(0, 1.05)
+    plt.title("FedAvg vs. Shapley vs. Stackelberg")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -35,18 +93,17 @@ def plot_convergence(results_by_strategy: dict[str, dict], output_path: Path) ->
     plt.close()
 
 
-def plot_detection_rate(results_by_strategy: dict[str, dict], output_path: Path) -> None:
+def plot_detection_rate(runs_by_strategy, output_path):
     plt.figure(figsize=(10, 6))
-    for strategy_name, data in results_by_strategy.items():
-        if strategy_name == "fedavg":
-            continue  # FedAvg has no free-rider detection mechanism
-        num_free_riders = data["num_free_riders"]
-        rounds = [r["round"] for r in data["rounds"]]
-        detected_counts = [len(r.get("detected_free_riders", [])) for r in data["rounds"]]
-        rate = [c / num_free_riders if num_free_riders else 0 for c in detected_counts]
-        plt.plot(rounds, rate, marker="o", label=strategy_name)
+    axis = plt.gca()
+    for strategy, runs in runs_by_strategy.items():
+        if strategy == "fedavg":
+            continue
+        rounds, means, stds = aggregate_detection_rate(runs)
+        if rounds:
+            plot_band(axis, rounds, means, stds, strategy, COLORS.get(strategy))
     plt.xlabel("Round")
-    plt.ylabel("Free-rider detection rate")
+    plt.ylabel("Free-rider detection rate (recall: real free-riders flagged / total)")
     plt.ylim(0, 1.1)
     plt.title("Free-rider detection rate by strategy")
     plt.legend()
@@ -56,27 +113,36 @@ def plot_detection_rate(results_by_strategy: dict[str, dict], output_path: Path)
     plt.close()
 
 
-def plot_equity_index(results_by_strategy: dict[str, dict], output_path: Path) -> None:
+def plot_classification_metrics(runs_by_strategy, output_path):
+    metric_names = ["precision", "recall", "f1"]
+    figure, axes = plt.subplots(1, len(metric_names), figsize=(15, 5), sharey=True)
+    for axis, metric_name in zip(axes, metric_names):
+        plot_metric(axis, runs_by_strategy, metric_name)
+        axis.set_xlabel("Round")
+        axis.set_title(metric_name.capitalize())
+        axis.set_ylim(0, 1.05)
+        axis.grid(True, alpha=0.3)
+        axis.legend()
+    axes[0].set_ylabel("Macro-averaged score (centralized test set)")
+    figure.suptitle("Precision / recall / F1 by strategy")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=150)
+    plt.close(figure)
+
+
+def plot_reward_distance(runs_by_strategy, output_path, alpha):
     plt.figure(figsize=(10, 6))
-    for strategy_name, data in results_by_strategy.items():
-        if strategy_name == "fedavg":
-            continue  # FedAvg has no per-client scores to evaluate equity of
-        num_free_riders = data["num_free_riders"]
-        rounds, indices = [], []
-        for r in data["rounds"]:
-            if "client_scores" not in r:
-                continue
-            index = reward_equity_index(r["client_scores"], num_free_riders)
-            if index is not None:
-                rounds.append(r["round"])
-                indices.append(index)
+    axis = plt.gca()
+    for strategy, runs in runs_by_strategy.items():
+        if strategy == "fedavg":
+            continue
+        references = [reference_for_run(run, alpha) for run in runs]
+        rounds, means, stds = aggregate_cumulative_reward_distance(runs, references)
         if rounds:
-            plt.plot(rounds, indices, marker="o", label=strategy_name)
-    plt.axhline(0, color="gray", linewidth=0.8, linestyle="--")
+            plot_band(axis, rounds, means, stds, strategy, COLORS.get(strategy))
     plt.xlabel("Round")
-    plt.ylabel("Reward equity index (point-biserial correlation)")
-    plt.ylim(-1.1, 1.1)
-    plt.title("Does each strategy's score rank honest clients above free-riders?")
+    plt.ylabel("Squared distance to the reference reward vector")
+    plt.title("Cumulative reward vs. reference (data share for honest clients, 0 for free-riders)")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -84,26 +150,21 @@ def plot_equity_index(results_by_strategy: dict[str, dict], output_path: Path) -
     plt.close()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Compare strategy result JSONs.")
-    parser.add_argument("result_paths", nargs=3, type=Path)
+def main():
+    parser = argparse.ArgumentParser(description="Compare strategy result JSONs across seeds.")
+    parser.add_argument("result_paths", nargs="+", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
+    parser.add_argument("--alpha", type=float, default=0.5)
     args = parser.parse_args()
 
-    results_by_strategy = {}
-    for path in args.result_paths:
-        data = load_results(path)
-        results_by_strategy[data["strategy"]] = data
+    runs_by_strategy = group_by_strategy(args.result_paths)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    plot_convergence(results_by_strategy, args.output_dir / "convergence.png")
-    plot_detection_rate(results_by_strategy, args.output_dir / "detection_rate.png")
-    plot_equity_index(results_by_strategy, args.output_dir / "equity_index.png")
-    print(
-        f"Wrote {args.output_dir / 'convergence.png'}, "
-        f"{args.output_dir / 'detection_rate.png'}, and "
-        f"{args.output_dir / 'equity_index.png'}"
-    )
+    plot_convergence(runs_by_strategy, args.output_dir / "convergence.png")
+    plot_detection_rate(runs_by_strategy, args.output_dir / "detection_rate.png")
+    plot_classification_metrics(runs_by_strategy, args.output_dir / "classification_metrics.png")
+    plot_reward_distance(runs_by_strategy, args.output_dir / "reward_distance.png", args.alpha)
+    print(f"Gráficos salvos em {args.output_dir}")
 
 
 if __name__ == "__main__":

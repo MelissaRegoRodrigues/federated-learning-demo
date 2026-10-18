@@ -1,149 +1,191 @@
-"""STACKELBERG-STYLE REPUTATION-GATED AGGREGATION
+import math
+import time
 
-Unlike Shapley (which re-evaluates the model n+1 times every single
-round — exact, but expensive), Stackelberg here builds a cheap, CUMULATIVE
-reputation signal with zero extra model evaluations, then runs a
-price/participation game only among clients that reputation says are
-still trustworthy. This is the concrete practical trade-off to state next
-to Shapley in the thesis: Shapley = expensive + exact + no memory across
-rounds; Stackelberg = cheap + approximate + builds a track record.
-
-Per round:
-  1. Compute the coordinate-wise MEDIAN update across all clients — a
-     robust "consensus direction" a minority of bad updates can't drag
-     around the way a mean can.
-  2. For each client, cosine-similarity(its update, the median) is this
-     round's quality signal (no model evaluation needed — just linear
-     algebra on the updates already in hand).
-  3. Update a running reputation (EMA) per client from that signal.
-  4. Clients in the bottom 25th percentile of reputation (round 2+ only —
-     round 1 has no history to threshold) are excluded from this round's
-     aggregation: the server "won't offer them a price."
-  5. Among the remaining eligible clients, run a simple price-equilibrium
-     search (server picks the price that minimizes its own cost; clients
-     "accept" if the price covers their simulated participation cost) —
-     this is the actual Stackelberg leader/follower game, layered on top
-     of the reputation gate from step 4.
-  6. Aggregate (plain mean) over whichever clients are both
-     reputation-eligible and price-participating.
-"""
 import numpy as np
-from flwr.common import ndarrays_to_parameters, parameters_to_ndarrays
+from flwr.common import FitIns, ndarrays_to_parameters, parameters_to_ndarrays
 
-from flapp.strategies.base import CentralEvalStrategy, average_ndarrays
+from flapp import economics
+from flapp.strategies.base import (
+    CentralEvalStrategy,
+    fail_if_clients_missing,
+    sample_sizes_by_partition,
+    scores_as_strings,
+    updates_by_partition,
+    weighted_average_ndarrays,
+)
 
-DETECTION_PERCENTILE = 25
-REPUTATION_HISTORY_WEIGHT = 0.7  # how much of the OLD reputation carries forward each round
+ENTROPY_WEIGHT = 0.6
+COMPATIBILITY_THRESHOLD = 0.01
+MODEL_SIZE = 18406
 
 
-def _coordinate_median(param_lists: list[list]) -> list:
-    return [np.median(np.stack(layer), axis=0) for layer in zip(*param_lists)]
+def flatten(params):
+    pieces = []
+    for layer in params:
+        pieces.append(np.asarray(layer, dtype=np.float64).ravel())
+    return np.concatenate(pieces)
 
 
-def _flatten(params: list) -> np.ndarray:
-    return np.concatenate([p.ravel() for p in params])
+def gradient_of(global_weights, client_weights):
+    return flatten(global_weights) - flatten(client_weights)
 
 
-def _cosine_similarity(a: list, b: list) -> float:
-    flat_a, flat_b = _flatten(a), _flatten(b)
-    denom = np.linalg.norm(flat_a) * np.linalg.norm(flat_b)
-    if denom == 0:
+def magnitude_weight(gradient_i, gradient_j):
+    energy_i = float(np.dot(gradient_i, gradient_i))
+    energy_j = float(np.dot(gradient_j, gradient_j))
+    return energy_i / (energy_i + energy_j)
+
+
+def plogp(value):
+    if value == 0:
         return 0.0
-    return float(np.dot(flat_a, flat_b) / denom)
+    return value * math.log(value)
 
 
-def estimate_client_costs(client_ids, rng: np.random.Generator) -> dict:
-    """Simulated per-client participation cost (stand-in for real-world
-    signals like battery/bandwidth/compute cost — out of scope to model
-    precisely here; see spec's non-goals)."""
-    return {cid: 0.5 + 1.5 * rng.random() for cid in client_ids}
+def cosine(gradient_i, gradient_j):
+    norms = np.linalg.norm(gradient_i) * np.linalg.norm(gradient_j)
+    if norms == 0:
+        return 0.0
+    return float(np.dot(gradient_i, gradient_j) / norms)
 
 
-def calculate_participation_rate(price: float, client_costs: dict):
-    participating = [cid for cid, cost in client_costs.items() if price > 0.8 * cost]
-    rate = len(participating) / len(client_costs) if client_costs else 0.0
-    return rate, participating
+def entro(gradient_i, gradient_j, alpha=ENTROPY_WEIGHT):
+    if not np.any(gradient_i) and not np.any(gradient_j):
+        return 0.0
+    p_i = magnitude_weight(gradient_i, gradient_j)
+    p_j = magnitude_weight(gradient_j, gradient_i)
+    entropy = -(plogp(p_i) + plogp(p_j))
+    return alpha * entropy + (1 - alpha) * cosine(gradient_i, gradient_j)
 
 
-def calculate_server_cost(price: float, participation_rate: float, num_clients: int):
-    num_participated = max(1, int(participation_rate * num_clients)) if num_clients else 0
-    payment_cost = price * num_participated
-    compute_cost = num_participated * 0.1
-    return payment_cost + compute_cost, payment_cost, compute_cost
-
-
-def find_stackelberg_equilibrium(client_costs: dict, max_price: float = 3.0) -> float:
-    best_price, best_cost = 0.1, float("inf")
-    num_clients = len(client_costs)
-    for price in np.arange(0.1, max_price, 0.1):
-        rate, _ = calculate_participation_rate(price, client_costs)
-        cost, _, _ = calculate_server_cost(price, rate, num_clients)
-        if cost < best_cost:
-            best_cost, best_price = cost, price
-    return float(best_price)
+def compatibility(gradients):
+    client_ids = list(gradients.keys())
+    values = {}
+    for client_id in client_ids:
+        others = [other for other in client_ids if other != client_id]
+        if len(others) == 0:
+            values[client_id] = 0.0
+            continue
+        total = 0.0
+        for other in others:
+            total += entro(gradients[client_id], gradients[other])
+        values[client_id] = total / len(others)
+    return values
 
 
 class StackelbergStrategy(CentralEvalStrategy):
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        *,
+        seed=0,
+        dataset_sizes=None,
+        num_rounds=50,
+        compatibility_threshold=COMPATIBILITY_THRESHOLD,
+        model_size=MODEL_SIZE,
+        **kwargs,
+    ):
         super().__init__(strategy_name="stackelberg", **kwargs)
-        self.reputation: dict[int, float] = {}
-        self._last_extra: dict = {}
-        self._rng = np.random.default_rng()
+        self.seed = seed
+        self.compatibility_threshold = compatibility_threshold
+        self.model_size = model_size
+        self.barred = set()
+        self.last_extra = {}
+        self.current_price = 0.0
 
-    def aggregate_fit(self, server_round, results, failures):
-        if not results:
-            return None, {}
-
-        # Keyed by the client-reported partition_id, NOT client.cid — see
-        # the same note in strategies/shapley.py.
-        updates = {
-            fit_res.metrics["partition_id"]: parameters_to_ndarrays(fit_res.parameters)
-            for client, fit_res in results
-        }
-        for cid in updates:
-            self.reputation.setdefault(cid, 1.0)
-
-        median_update = _coordinate_median(list(updates.values()))
-        for cid, update in updates.items():
-            similarity = _cosine_similarity(update, median_update)
-            self.reputation[cid] = (
-                REPUTATION_HISTORY_WEIGHT * self.reputation[cid]
-                + (1 - REPUTATION_HISTORY_WEIGHT) * similarity
+        if dataset_sizes is None:
+            dataset_sizes = {}
+        self.dataset_sizes = dataset_sizes
+        self.client_params = {}
+        for client_id in dataset_sizes:
+            self.client_params[client_id] = economics.client_parameters(seed, client_id)
+        self.total_time = 0.0
+        if self.client_params:
+            self.total_time = economics.calibrate_total_time(
+                num_rounds, self.client_params, self.dataset_sizes, self.model_size
             )
 
-        if server_round == 1:
-            # No history yet to threshold meaningfully — seed reputation
-            # this round, detect nothing.
-            detected: list[int] = []
-            eligible_ids = set(updates.keys())
+    def active_client_params(self):
+        active = {}
+        for client_id, params in self.client_params.items():
+            if client_id not in self.barred:
+                active[client_id] = params
+        return active
+
+    def price_for_round(self, server_round):
+        active = self.active_client_params()
+        if not active:
+            return 0.0
+        return economics.server_price(server_round, self.total_time, active, self.dataset_sizes, self.model_size)
+
+    def configure_fit(self, server_round, parameters, client_manager):
+        self.current_global = parameters_to_ndarrays(parameters)
+        self.current_price = self.price_for_round(server_round)
+        barred_text = ",".join(str(client_id) for client_id in sorted(self.barred))
+        config = {
+            "server_round": server_round,
+            "price": self.current_price,
+            "model_size": self.model_size,
+            "barred": barred_text,
+        }
+        clients = client_manager.sample(num_clients=self.num_clients, min_num_clients=self.num_clients)
+        instructions = []
+        for client in clients:
+            instructions.append((client, FitIns(parameters, config)))
+        return instructions
+
+    def aggregate_fit(self, server_round, results, failures):
+        fail_if_clients_missing(server_round, failures)
+        if not results:
+            return None, {}
+        start_time = time.perf_counter()
+
+        models = updates_by_partition(results)
+        datasizes = sample_sizes_by_partition(results)
+
+        participants = []
+        for client_id, datasize in datasizes.items():
+            if datasize > 0 and client_id not in self.barred:
+                participants.append(client_id)
+
+        gradients = {}
+        for client_id in participants:
+            gradients[client_id] = gradient_of(self.current_global, models[client_id])
+        compatibilities = compatibility(gradients)
+
+        for client_id, value in compatibilities.items():
+            if value < self.compatibility_threshold:
+                self.barred.add(client_id)
+
+        included = [client_id for client_id in participants if client_id not in self.barred]
+        payments = {}
+        for client_id in models:
+            if client_id in included:
+                payments[client_id] = economics.DISCOUNT ** (server_round - 1) * self.current_price * datasizes[client_id]
+            else:
+                payments[client_id] = 0.0
+
+        if included:
+            total_data = sum(datasizes[client_id] for client_id in included)
+            weights = {client_id: datasizes[client_id] / total_data for client_id in included}
+            included_models = {client_id: models[client_id] for client_id in included}
+            aggregated = weighted_average_ndarrays(included_models, weights)
         else:
-            threshold = np.percentile(list(self.reputation.values()), DETECTION_PERCENTILE)
-            detected = [cid for cid in updates if self.reputation[cid] < threshold]
-            eligible_ids = set(updates.keys()) - set(detected)
+            aggregated = self.current_global
 
-        costs = estimate_client_costs(eligible_ids, self._rng)
-        price = find_stackelberg_equilibrium(costs)
-        participation_rate, participating = calculate_participation_rate(price, costs)
-        server_cost, payment_cost, compute_cost = calculate_server_cost(
-            price, participation_rate, len(eligible_ids)
-        )
-
-        selected_ids = participating if participating else list(eligible_ids)
-        aggregated = average_ndarrays([updates[cid] for cid in selected_ids])
-
-        self._last_extra = {
-            "client_scores": {str(cid): float(r) for cid, r in self.reputation.items()},
-            "detected_free_riders": detected,
+        self.last_extra = {
+            "client_scores": scores_as_strings(compatibilities),
+            "detected_free_riders": sorted(self.barred),
             "metadata": {
-                "price": price,
-                "participation_rate": participation_rate,
-                "num_participated": len(selected_ids),
-                "server_cost": server_cost,
-                "payment_cost": payment_cost,
-                "compute_cost": compute_cost,
+                "price": self.current_price,
+                "total_time": self.total_time,
+                "datasizes": scores_as_strings(datasizes),
+                "num_participated": len(included),
+                "rewards": scores_as_strings(payments),
+                "payment_cost": sum(payments.values()),
+                "aggregate_seconds": time.perf_counter() - start_time,
             },
         }
         return ndarrays_to_parameters(aggregated), {}
 
     def _round_extra(self):
-        return self._last_extra
+        return self.last_extra

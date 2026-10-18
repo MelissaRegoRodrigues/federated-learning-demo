@@ -1,116 +1,112 @@
 import numpy as np
 import pytest
-from flwr.common import FitRes, Status, Code, ndarrays_to_parameters, parameters_to_ndarrays
+from flwr.common import Code, FitRes, Status, ndarrays_to_parameters, parameters_to_ndarrays
 
-from flapp.strategies.shapley import ShapleyWeightedStrategy
+from flapp.strategies.shapley import (
+    ShapleyWeightedStrategy,
+    coalition_model,
+    contribution_weights,
+    lowest_contributions,
+    merged_contributions,
+)
 
 
-class _FakeClientProxy:
-    def __init__(self, cid: str):
+class FakeClientProxy:
+    def __init__(self, cid):
         self.cid = cid
 
 
-def _fit_res(ndarrays, partition_id):
+def fit_res(ndarrays, partition_id, num_examples=10):
     return FitRes(
         status=Status(code=Code.OK, message=""),
         parameters=ndarrays_to_parameters(ndarrays),
-        num_examples=10,
+        num_examples=num_examples,
         metrics={"partition_id": partition_id},
     )
 
 
-def _make_strategy(evaluate_fn):
+def distance_utility(server_round, ndarrays, config):
+    target = np.array([1.0, 1.0])
+    distance = float(np.linalg.norm(ndarrays[0] - target))
+    return 0.0, {"accuracy": 1.0 / (1.0 + distance)}
+
+
+def make_strategy(voting_rate=0.2):
     return ShapleyWeightedStrategy(
-        evaluate_fn=evaluate_fn, results_path=None, num_clients=3, num_free_riders=1
+        evaluate_fn=distance_utility,
+        shapley_eval_fn=distance_utility,
+        results_path=None,
+        num_clients=5,
+        num_free_riders=1,
+        voting_rate=voting_rate,
     )
 
 
-def test_free_rider_gets_lower_shapley_than_honest_clients():
-    # Utility function: pretend accuracy is proportional to how much
-    # client 2's (the "bad" client's) huge-magnitude update pollutes the
-    # average — so removing client 2 measurably IMPROVES utility, and
-    # removing an honest client measurably HURTS it.
-    def evaluate_fn(server_round, ndarrays, config):
-        magnitude = float(np.sum(np.abs(ndarrays[0])))
-        return 0.0, {"accuracy": max(0.0, 1.0 - magnitude / 100.0)}
+def five_clients_with_one_free_rider():
+    results = [(FakeClientProxy("0"), fit_res([np.array([0.0, 0.0])], 0))]
+    for partition_id in range(1, 5):
+        results.append((FakeClientProxy(str(partition_id)), fit_res([np.array([1.0, 1.0])], partition_id)))
+    return results
 
-    strategy = _make_strategy(evaluate_fn)
-    results = [
-        (_FakeClientProxy("0"), _fit_res([np.array([1.0, 1.0])], 0)),
-        (_FakeClientProxy("1"), _fit_res([np.array([1.0, 1.0])], 1)),
-        (_FakeClientProxy("2"), _fit_res([np.array([50.0, 50.0])], 2)),  # the free-rider
-    ]
-    strategy.aggregate_fit(1, results, [])
+
+def test_coalition_model_is_weighted_by_data_size():
+    models = {0: [np.array([0.0])], 1: [np.array([10.0])]}
+    sizes = {0: 30, 1: 10}
+    result = coalition_model(models, sizes, [0, 1])
+    np.testing.assert_allclose(result[0], [2.5])
+
+
+def test_lowest_contributions_flags_twenty_percent():
+    values = {0: 0.5, 1: -0.1, 2: 0.3, 3: 0.0, 4: 0.9, 5: 0.2, 6: 0.4, 7: 0.6, 8: 0.7, 9: 0.8}
+    assert lowest_contributions(values, 0.2) == [1, 3]
+
+
+def test_merged_contributions_follow_majority_voting_with_one_validator():
+    contributions = merged_contributions([0, 1, 2], flagged=[1])
+    assert contributions == {0: 1, 1: 0, 2: 1}
+    assert contribution_weights(contributions) == {0: 0.5, 1: 0.0, 2: 0.5}
+
+
+def test_free_rider_gets_the_lowest_contribution_and_is_flagged():
+    strategy = make_strategy()
+    strategy.aggregate_fit(1, five_clients_with_one_free_rider(), [])
     extra = strategy._round_extra()
-    scores = extra["client_scores"]
+    scores = {int(k): v for k, v in extra["client_scores"].items()}
+    assert min(scores, key=scores.get) == 0
+    assert extra["detected_free_riders"] == [0]
+    assert extra["metadata"]["rewards"]["0"] == 0.0
 
-    assert scores["2"] < scores["0"]
-    assert scores["2"] < scores["1"]
-    assert 2 in extra["detected_free_riders"]
 
-
-def test_aggregate_fit_returns_valid_parameters():
-    def evaluate_fn(server_round, ndarrays, config):
-        return 0.0, {"accuracy": 0.5}
-
-    strategy = _make_strategy(evaluate_fn)
-    results = [
-        (_FakeClientProxy("0"), _fit_res([np.array([1.0, 2.0])], 0)),
-        (_FakeClientProxy("1"), _fit_res([np.array([3.0, 4.0])], 1)),
-    ]
-    parameters, metrics = strategy.aggregate_fit(1, results, [])
-    assert parameters is not None
-    assert metrics == {}
+def test_aggregation_averages_only_the_clients_not_flagged():
+    strategy = make_strategy()
+    parameters, _ = strategy.aggregate_fit(1, five_clients_with_one_free_rider(), [])
+    np.testing.assert_allclose(parameters_to_ndarrays(parameters)[0], [1.0, 1.0])
 
 
 def test_empty_results_returns_none():
-    strategy = _make_strategy(lambda *a: (0.0, {"accuracy": 0.0}))
-    parameters, metrics = strategy.aggregate_fit(1, [], [])
-    assert parameters is None
+    strategy = make_strategy()
+    assert strategy.aggregate_fit(1, [], []) == (None, {})
 
 
-def test_near_zero_total_contribution_falls_back_to_equal_weights():
-    # A constant evaluate_fn means every leave-one-out utility is
-    # identical, so every Shapley value is exactly 0 and their sum is 0.
-    # Dividing by that (or anything close to it) must NOT blow up the
-    # aggregation weights — found during full-scale validation to
-    # occasionally explode the aggregated model into unrecoverable garbage.
-    strategy = _make_strategy(lambda *a: (0.0, {"accuracy": 0.5}))
-    results = [
-        (_FakeClientProxy("0"), _fit_res([np.array([1.0, 1.0])], 0)),
-        (_FakeClientProxy("1"), _fit_res([np.array([2.0, 2.0])], 1)),
-        (_FakeClientProxy("2"), _fit_res([np.array([3.0, 3.0])], 2)),
-    ]
-    parameters, _ = strategy.aggregate_fit(1, results, [])
-    aggregated = parameters_to_ndarrays(parameters)
-    np.testing.assert_allclose(aggregated[0], [2.0, 2.0])  # falls back to plain average
+def test_aggregate_fit_does_not_depend_on_the_order_clients_answer():
+    rng = np.random.default_rng(0)
+    updates = []
+    for partition_id in range(5):
+        updates.append([rng.normal(size=(2,))])
+
+    outputs = []
+    for order in [[0, 1, 2, 3, 4], [4, 2, 0, 3, 1]]:
+        strategy = make_strategy()
+        results = []
+        for partition_id in order:
+            results.append((FakeClientProxy(str(partition_id)), fit_res(updates[partition_id], partition_id)))
+        parameters, _ = strategy.aggregate_fit(1, results, [])
+        outputs.append((parameters_to_ndarrays(parameters), strategy._round_extra()["detected_free_riders"]))
+
+    np.testing.assert_array_equal(outputs[0][0][0], outputs[1][0][0])
+    assert outputs[0][1] == outputs[1][1]
 
 
-def test_free_rider_gets_weight_near_zero_not_negative():
-    # Weights must stay in [0, 1] and sum to 1, regardless of how skewed
-    # the raw Shapley values are — a signed-weight version (letting the
-    # free-rider's weight go negative) was tried first and found, during
-    # full-scale validation, to occasionally destabilize training badly
-    # enough that it never recovered.
-    def evaluate_fn(server_round, ndarrays, config):
-        magnitude = float(np.sum(np.abs(ndarrays[0])))
-        return 0.0, {"accuracy": max(0.0, 1.0 - magnitude / 100.0)}
-
-    strategy = _make_strategy(evaluate_fn)
-    results = [
-        (_FakeClientProxy("0"), _fit_res([np.array([1.0, 1.0])], 0)),
-        (_FakeClientProxy("1"), _fit_res([np.array([1.0, 1.0])], 1)),
-        (_FakeClientProxy("2"), _fit_res([np.array([50.0, 50.0])], 2)),  # the free-rider
-    ]
-    strategy.aggregate_fit(1, results, [])
-    # Recompute weights the same way aggregate_fit does, to check the sign/sum invariant
-    shapley_values = {
-        int(cid): v for cid, v in strategy._round_extra()["client_scores"].items()
-    }
-    min_contribution = min(shapley_values.values())
-    shifted = {cid: v - min_contribution for cid, v in shapley_values.items()}
-    total_shifted = sum(shifted.values())
-    weights = {cid: v / total_shifted for cid, v in shifted.items()}
-    assert all(w >= 0 for w in weights.values())
-    assert sum(weights.values()) == pytest.approx(1.0)
-    assert weights[2] < weights[0]  # free-rider still gets the smallest weight
+def test_missing_eval_fn_warns():
+    with pytest.warns(UserWarning):
+        ShapleyWeightedStrategy(evaluate_fn=distance_utility, results_path=None, num_clients=2, num_free_riders=0)

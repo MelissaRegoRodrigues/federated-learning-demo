@@ -35,7 +35,6 @@ def test_weighted_average_ndarrays():
 
 
 class _ConcreteStrategy(CentralEvalStrategy):
-    """Minimal concrete subclass just to exercise the shared base."""
 
     def aggregate_fit(self, server_round, results, failures):
         updates = {
@@ -79,3 +78,12 @@ def test_configure_evaluate_returns_empty_and_aggregate_evaluate_is_noop():
     )
     assert strategy.configure_evaluate(1, None, client_manager=None) == []
     assert strategy.aggregate_evaluate(1, [], []) == (None, {})
+
+
+def test_fail_if_clients_missing_raises_when_a_client_failed():
+    import pytest
+    from flapp.strategies.base import fail_if_clients_missing
+
+    fail_if_clients_missing(1, [])
+    with pytest.raises(RuntimeError):
+        fail_if_clients_missing(2, [Exception("worker killed")])

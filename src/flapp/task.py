@@ -1,7 +1,3 @@
-"""Single source of truth for 'what is the model and what is the data' —
-every client and the server's centralized evaluator use exactly this
-module, so there is never an ambiguity about which CNN or which MNIST
-copy is in play."""
 import functools
 from pathlib import Path
 
@@ -9,22 +5,19 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from sklearn.metrics import precision_recall_fscore_support
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
 from flapp.partition import partition_dirichlet
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
-_MNIST_TRANSFORM = transforms.Compose(
-    [transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))]
-)
+VALIDATION_FRACTION = 0.1
+MNIST_TRANSFORM = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
 
 
 class SimpleCNN(nn.Module):
-    """Same architecture as the repo's original SimpleCNN: 2 conv + 2 fc,
-    sized for MNIST's 1x28x28 input."""
-
-    def __init__(self, num_classes: int = 10) -> None:
+    def __init__(self, num_classes=10):
         super().__init__()
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
@@ -32,7 +25,7 @@ class SimpleCNN(nn.Module):
         self.fc1 = nn.Linear(64 * 7 * 7, 128)
         self.fc2 = nn.Linear(128, num_classes)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x):
         x = self.pool(F.relu(self.conv1(x)))
         x = self.pool(F.relu(self.conv2(x)))
         x = x.view(-1, 64 * 7 * 7)
@@ -40,24 +33,36 @@ class SimpleCNN(nn.Module):
         return self.fc2(x)
 
 
-def get_params(model: nn.Module) -> list[np.ndarray]:
-    """Flower's NumPyClient works with plain numpy arrays, not state_dicts."""
-    return [value.detach().cpu().numpy() for value in model.state_dict().values()]
+def get_params(model):
+    params = []
+    for value in model.state_dict().values():
+        params.append(value.detach().cpu().numpy().copy())
+    return params
 
 
-def set_params(model: nn.Module, params: list[np.ndarray]) -> None:
+def set_params(model, params):
     keys = list(model.state_dict().keys())
-    state_dict = {k: torch.tensor(v) for k, v in zip(keys, params)}
+    state_dict = {}
+    for key, value in zip(keys, params):
+        state_dict[key] = torch.tensor(value)
     model.load_state_dict(state_dict, strict=True)
 
 
-def train(model: nn.Module, loader, epochs: int, device: str = "cpu") -> None:
+def subtract_weights(new_weights, old_weights):
+    result = []
+    for new_layer, old_layer in zip(new_weights, old_weights):
+        result.append(new_layer - old_layer)
+    return result
+
+
+def train(model, loader, epochs, device="cpu", lr=0.01):
     model.to(device)
     model.train()
-    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
-    for _ in range(epochs):
+    optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+    for epoch in range(epochs):
         for data, target in loader:
-            data, target = data.to(device), target.to(device)
+            data = data.to(device)
+            target = target.to(device)
             optimizer.zero_grad()
             output = model(data)
             loss = F.cross_entropy(output, target)
@@ -65,44 +70,86 @@ def train(model: nn.Module, loader, epochs: int, device: str = "cpu") -> None:
             optimizer.step()
 
 
-def test(model: nn.Module, loader, device: str = "cpu") -> float:
+def predict_all(model, loader, device="cpu"):
     model.to(device)
     model.eval()
-    correct, total = 0, 0
+    all_predictions = []
+    all_targets = []
+    total_loss = 0.0
     with torch.no_grad():
         for data, target in loader:
-            data, target = data.to(device), target.to(device)
-            pred = model(data).argmax(dim=1)
-            correct += (pred == target).sum().item()
-            total += target.size(0)
-    return correct / total if total > 0 else 0.0
+            data = data.to(device)
+            target = target.to(device)
+            output = model(data)
+            total_loss += F.cross_entropy(output, target, reduction="sum").item()
+            all_predictions.append(output.argmax(dim=1).cpu())
+            all_targets.append(target.cpu())
+    return all_predictions, all_targets, total_loss
+
+
+def evaluate_metrics(model, loader, device="cpu"):
+    all_predictions, all_targets, total_loss = predict_all(model, loader, device)
+    if len(all_predictions) == 0:
+        return {"loss": 0.0, "accuracy": 0.0, "precision": 0.0, "recall": 0.0, "f1": 0.0}
+
+    predictions = torch.cat(all_predictions).numpy()
+    targets = torch.cat(all_targets).numpy()
+    precision, recall, f1, support = precision_recall_fscore_support(
+        targets, predictions, average="macro", zero_division=0
+    )
+    return {
+        "loss": total_loss / len(targets),
+        "accuracy": float((predictions == targets).mean()),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1": float(f1),
+    }
 
 
 @functools.lru_cache(maxsize=1)
-def _load_mnist_train():
-    return datasets.MNIST(str(DATA_DIR), train=True, download=True, transform=_MNIST_TRANSFORM)
+def load_mnist_train():
+    return datasets.MNIST(str(DATA_DIR), train=True, download=True, transform=MNIST_TRANSFORM)
 
 
 @functools.lru_cache(maxsize=1)
-def _load_mnist_test():
-    return datasets.MNIST(str(DATA_DIR), train=False, download=True, transform=_MNIST_TRANSFORM)
+def load_mnist_test():
+    return datasets.MNIST(str(DATA_DIR), train=False, download=True, transform=MNIST_TRANSFORM)
+
+
+def validation_indices(seed, fraction=VALIDATION_FRACTION):
+    num_train = len(load_mnist_train())
+    num_validation = int(num_train * fraction)
+    rng = np.random.default_rng(seed)
+    return rng.choice(num_train, num_validation, replace=False)
+
+
+def training_indices(seed):
+    num_train = len(load_mnist_train())
+    is_validation = np.zeros(num_train, dtype=bool)
+    is_validation[validation_indices(seed)] = True
+    return np.where(~is_validation)[0]
 
 
 @functools.lru_cache(maxsize=None)
-def load_mnist_partition(
-    partition_id: int, num_partitions: int, alpha: float, seed: int, batch_size: int = 32
-) -> DataLoader:
-    """Each simulated client process calls this independently and gets the
-    SAME partitioning (same seed => same np.random.default_rng draws), so
-    no cross-process coordination is needed — see partition.py."""
-    train_set = _load_mnist_train()
-    indices_per_client = partition_dirichlet(
-        train_set.targets.numpy(), num_partitions, alpha, seed
-    )
-    return DataLoader(
-        Subset(train_set, indices_per_client[partition_id]), batch_size=batch_size, shuffle=True
-    )
+def load_partition_dataset(partition_id, num_partitions, alpha, seed):
+    train_set = load_mnist_train()
+    available = training_indices(seed)
+    labels = train_set.targets.numpy()[available]
+    positions_per_client = partition_dirichlet(labels, num_partitions, alpha, seed)
+    client_indices = available[positions_per_client[partition_id]]
+    return Subset(train_set, client_indices)
 
 
-def load_test_set(batch_size: int = 64) -> DataLoader:
-    return DataLoader(_load_mnist_test(), batch_size=batch_size)
+def make_train_loader(dataset, batch_size, shuffle_seed):
+    generator = torch.Generator().manual_seed(shuffle_seed)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator)
+
+
+def load_test_set(batch_size=512):
+    return DataLoader(load_mnist_test(), batch_size=batch_size)
+
+
+def load_validation_set(fraction=VALIDATION_FRACTION, seed=0, batch_size=512):
+    train_set = load_mnist_train()
+    indices = validation_indices(seed, fraction)
+    return DataLoader(Subset(train_set, indices), batch_size=batch_size)
