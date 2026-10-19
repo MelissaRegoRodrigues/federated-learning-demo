@@ -111,3 +111,20 @@ def test_cumulative_reward_distance_is_zero_when_rewards_follow_the_reference():
     result_rounds, means, stds = aggregate_cumulative_reward_distance([run, run], [reference, reference])
     assert result_rounds == [1, 2, 3]
     assert means[-1] == pytest.approx(0.0)
+
+
+def test_load_price_schedule_reads_the_price_of_each_round(tmp_path):
+    import json
+
+    from flapp.aggregate import load_price_schedule
+
+    run = {
+        "rounds": [
+            {"round": 0, "accuracy": 0.1},
+            {"round": 1, "metadata": {"price": 1.2}},
+            {"round": 2, "metadata": {"price": 1.3}},
+        ]
+    }
+    path = tmp_path / "stackelberg_seed42.json"
+    path.write_text(json.dumps(run))
+    assert load_price_schedule(path) == {1: 1.2, 2: 1.3}

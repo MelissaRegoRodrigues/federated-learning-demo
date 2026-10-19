@@ -28,7 +28,12 @@ class LoggingFedAvg(FedAvg):
             return None
 
         loss, metrics = result
-        extra = {"metadata": {"aggregate_seconds": self.last_aggregate_seconds}}
+        extra = {
+            "metadata": {
+                "aggregate_seconds": self.last_aggregate_seconds,
+                "server_seconds": self.last_aggregate_seconds,
+            }
+        }
         log_round(
             self.results_path,
             server_round,

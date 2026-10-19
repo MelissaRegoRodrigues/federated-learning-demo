@@ -1,3 +1,4 @@
+import json
 import warnings
 
 import numpy as np
@@ -7,6 +8,15 @@ from flapp.fairness import normalized_shares, squared_distance
 
 def results_filename(strategy, seed):
     return f"{strategy}_seed{seed}.json"
+
+
+def load_price_schedule(path):
+    with open(path) as file:
+        run = json.load(file)
+    schedule = {}
+    for row in run["rounds"][1:]:
+        schedule[row["round"]] = row["metadata"]["price"]
+    return schedule
 
 
 def mean_std_across_runs(values_per_run):

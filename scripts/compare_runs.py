@@ -12,7 +12,14 @@ from flapp.aggregate import aggregate_cumulative_reward_distance, aggregate_dete
 from flapp.fairness import reference_shares
 from flapp.task import load_partition_dataset
 
-COLORS = {"fedavg": "#ff7f0e", "shapley": "#2ca02c", "stackelberg": "#1f77b4"}
+COLORS = {
+    "fedavg": "#ff7f0e",
+    "shapley": "#2ca02c",
+    "stackelberg": "#1f77b4",
+    "shapley (V=0.2)": "#98df8a",
+    "fedavg (controle)": "#d62728",
+    "shapley (V=0)": "#9467bd",
+}
 
 
 def load_results(path):
@@ -25,24 +32,37 @@ def seed_from_path(path):
     return int(match.group(1))
 
 
-def reference_for_run(run, alpha):
+def reference_for_run(run, alpha, dataset):
     num_clients = run["num_clients"]
     sizes = {}
     for client_id in range(num_clients):
-        sizes[client_id] = len(load_partition_dataset(client_id, num_clients, alpha, run["seed"]))
+        sizes[client_id] = len(load_partition_dataset(client_id, num_clients, alpha, run["seed"], dataset))
     return reference_shares(sizes, run["num_free_riders"])
 
 
-def group_by_strategy(result_paths):
-    runs_by_strategy = {}
+def label_for(path, strategy):
+    folder = path.parent.name
+    if folder == "control":
+        return f"{strategy} (controle)"
+    if folder == "shapley_v02":
+        return "shapley (V=0.2)"
+    if folder == "shapley_v0":
+        return "shapley (V=0)"
+    if folder == "fr0":
+        return f"{strategy} (sem free-riders)"
+    return strategy
+
+
+def group_by_label(result_paths):
+    runs_by_label = {}
     for path in result_paths:
         data = load_results(path)
         data["seed"] = seed_from_path(path)
-        strategy = data["strategy"]
-        if strategy not in runs_by_strategy:
-            runs_by_strategy[strategy] = []
-        runs_by_strategy[strategy].append(data)
-    return runs_by_strategy
+        label = label_for(path, data["strategy"])
+        if label not in runs_by_label:
+            runs_by_label[label] = []
+        runs_by_label[label].append(data)
+    return runs_by_label
 
 
 def plot_band(axis, rounds, means, stds, label, color):
@@ -67,25 +87,25 @@ def plot_each_seed(axis, runs, metric_name, label, color):
             axis.plot(rounds, values, color=color, alpha=0.6)
 
 
-def plot_metric(axis, runs_by_strategy, metric_name):
-    for strategy, runs in runs_by_strategy.items():
-        color = COLORS.get(strategy)
-        if strategy == "fedavg":
-            plot_each_seed(axis, runs, metric_name, strategy, color)
+def plot_metric(axis, runs_by_label, metric_name):
+    for label, runs in runs_by_label.items():
+        color = COLORS.get(label)
+        if label.startswith("fedavg"):
+            plot_each_seed(axis, runs, metric_name, label, color)
             continue
         rounds, means, stds = aggregate_metric(runs, metric_name)
         if rounds:
-            plot_band(axis, rounds, means, stds, strategy, color)
+            plot_band(axis, rounds, means, stds, label, color)
 
 
-def plot_convergence(runs_by_strategy, output_path):
+def plot_convergence(runs_by_label, output_path):
     plt.figure(figsize=(10, 6))
     axis = plt.gca()
-    plot_metric(axis, runs_by_strategy, "accuracy")
+    plot_metric(axis, runs_by_label, "accuracy")
     plt.xlabel("Round")
     plt.ylabel("Global accuracy (centralized test set)")
     plt.ylim(0, 1.05)
-    plt.title("FedAvg vs. Shapley vs. Stackelberg")
+    plt.title("Accuracy per round")
     plt.legend()
     plt.grid(True, alpha=0.3)
     plt.tight_layout()
@@ -93,15 +113,15 @@ def plot_convergence(runs_by_strategy, output_path):
     plt.close()
 
 
-def plot_detection_rate(runs_by_strategy, output_path):
+def plot_detection_rate(runs_by_label, output_path):
     plt.figure(figsize=(10, 6))
     axis = plt.gca()
-    for strategy, runs in runs_by_strategy.items():
-        if strategy == "fedavg":
+    for label, runs in runs_by_label.items():
+        if label.startswith("fedavg"):
             continue
         rounds, means, stds = aggregate_detection_rate(runs)
         if rounds:
-            plot_band(axis, rounds, means, stds, strategy, COLORS.get(strategy))
+            plot_band(axis, rounds, means, stds, label, COLORS.get(label))
     plt.xlabel("Round")
     plt.ylabel("Free-rider detection rate (recall: real free-riders flagged / total)")
     plt.ylim(0, 1.1)
@@ -113,33 +133,33 @@ def plot_detection_rate(runs_by_strategy, output_path):
     plt.close()
 
 
-def plot_classification_metrics(runs_by_strategy, output_path):
-    metric_names = ["precision", "recall", "f1"]
-    figure, axes = plt.subplots(1, len(metric_names), figsize=(15, 5), sharey=True)
+def plot_classification_metrics(runs_by_label, output_path):
+    metric_names = ["accuracy", "precision", "recall", "f1"]
+    figure, axes = plt.subplots(1, len(metric_names), figsize=(20, 5), sharey=True)
     for axis, metric_name in zip(axes, metric_names):
-        plot_metric(axis, runs_by_strategy, metric_name)
+        plot_metric(axis, runs_by_label, metric_name)
         axis.set_xlabel("Round")
         axis.set_title(metric_name.capitalize())
         axis.set_ylim(0, 1.05)
         axis.grid(True, alpha=0.3)
         axis.legend()
     axes[0].set_ylabel("Macro-averaged score (centralized test set)")
-    figure.suptitle("Precision / recall / F1 by strategy")
+    figure.suptitle("Accuracy / precision / recall / F1 by strategy")
     figure.tight_layout()
     figure.savefig(output_path, dpi=150)
     plt.close(figure)
 
 
-def plot_reward_distance(runs_by_strategy, output_path, alpha):
+def plot_reward_distance(runs_by_label, output_path, alpha, dataset):
     plt.figure(figsize=(10, 6))
     axis = plt.gca()
-    for strategy, runs in runs_by_strategy.items():
-        if strategy == "fedavg":
+    for label, runs in runs_by_label.items():
+        if label.startswith("fedavg"):
             continue
-        references = [reference_for_run(run, alpha) for run in runs]
+        references = [reference_for_run(run, alpha, dataset) for run in runs]
         rounds, means, stds = aggregate_cumulative_reward_distance(runs, references)
         if rounds:
-            plot_band(axis, rounds, means, stds, strategy, COLORS.get(strategy))
+            plot_band(axis, rounds, means, stds, label, COLORS.get(label))
     plt.xlabel("Round")
     plt.ylabel("Squared distance to the reference reward vector")
     plt.title("Cumulative reward vs. reference (data share for honest clients, 0 for free-riders)")
@@ -155,15 +175,16 @@ def main():
     parser.add_argument("result_paths", nargs="+", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("results"))
     parser.add_argument("--alpha", type=float, default=0.5)
+    parser.add_argument("--dataset", choices=["mnist", "fashion-mnist"], default="mnist")
     args = parser.parse_args()
 
-    runs_by_strategy = group_by_strategy(args.result_paths)
+    runs_by_label = group_by_label(args.result_paths)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    plot_convergence(runs_by_strategy, args.output_dir / "convergence.png")
-    plot_detection_rate(runs_by_strategy, args.output_dir / "detection_rate.png")
-    plot_classification_metrics(runs_by_strategy, args.output_dir / "classification_metrics.png")
-    plot_reward_distance(runs_by_strategy, args.output_dir / "reward_distance.png", args.alpha)
+    plot_convergence(runs_by_label, args.output_dir / "convergence.png")
+    plot_detection_rate(runs_by_label, args.output_dir / "detection_rate.png")
+    plot_classification_metrics(runs_by_label, args.output_dir / "classification_metrics.png")
+    plot_reward_distance(runs_by_label, args.output_dir / "reward_distance.png", args.alpha, args.dataset)
     print(f"Gráficos salvos em {args.output_dir}")
 
 

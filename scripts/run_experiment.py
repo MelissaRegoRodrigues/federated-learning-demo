@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from flwr.simulation import run_simulation
 
-from flapp.aggregate import results_filename
+from flapp.aggregate import load_price_schedule, results_filename
 from flapp.client_app import build_client_app
 from flapp.server_app import build_server_app
 
@@ -27,10 +27,25 @@ def parse_args():
     parser.add_argument("--local-epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.01)
-    parser.add_argument("--shapley-voting-rate", type=float, default=0.2, help="Shapley: fraction of lowest contributions excluded.")
+    parser.add_argument("--shapley-voting-rate", type=float, default=0.3, help="Shapley: fraction of lowest contributions excluded.")
     parser.add_argument("--stackelberg-cm0", type=float, default=0.01, help="Stackelberg: compatibility threshold Cm0.")
     parser.add_argument("--stackelberg-model-size", type=int, default=18406, help="Stackelberg: model size in the cost model.")
+    parser.add_argument("--dataset", choices=["mnist", "fashion-mnist"], default="mnist")
+    parser.add_argument(
+        "--free-rider-type",
+        choices=["silent", "low-effort"],
+        default="silent",
+        help="silent: returns the global model without training. "
+        "low-effort: trains for --low-effort-epochs local epochs instead of --local-epochs.",
+    )
+    parser.add_argument("--low-effort-epochs", type=int, default=1)
     parser.add_argument("--results-dir", default="results")
+    parser.add_argument(
+        "--price-from",
+        default=None,
+        help="Control run: every client chooses its data size as in the Stackelberg game, "
+        "using the price of each round of this Stackelberg result file.",
+    )
     parser.add_argument("--client-cpus", type=int, default=1, help="CPUs per simulated client.")
     return parser.parse_args()
 
@@ -56,6 +71,12 @@ def prepare_results_path(args):
 
 
 def make_client_app(args):
+    free_rider_epochs = None
+    if args.free_rider_type == "low-effort":
+        free_rider_epochs = args.low_effort_epochs
+    price_schedule = None
+    if args.price_from is not None:
+        price_schedule = load_price_schedule(args.price_from)
     return build_client_app(
         args.alpha,
         args.seed,
@@ -63,6 +84,10 @@ def make_client_app(args):
         args.local_epochs,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        price_schedule=price_schedule,
+        model_size=args.stackelberg_model_size,
+        dataset_name=args.dataset,
+        free_rider_epochs=free_rider_epochs,
     )
 
 
@@ -78,6 +103,7 @@ def make_server_app(args, results_path):
         voting_rate=args.shapley_voting_rate,
         compatibility_threshold=args.stackelberg_cm0,
         model_size=args.stackelberg_model_size,
+        dataset=args.dataset,
     )
 
 

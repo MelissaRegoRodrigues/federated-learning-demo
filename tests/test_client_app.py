@@ -6,12 +6,20 @@ from flapp.client_app import FlowerClient, make_round_seed
 from flapp.task import get_params
 
 
-def make_client(free_rider=False):
+def make_client(free_rider=False, local_epochs=1, free_rider_epochs=None):
     torch.manual_seed(0)
     images = torch.randn(16, 1, 28, 28)
     labels = torch.randint(0, 10, (16,))
     dataset = TensorDataset(images, labels)
-    return FlowerClient(dataset, free_rider=free_rider, local_epochs=1, partition_id=1, seed=42, batch_size=4)
+    return FlowerClient(
+        dataset,
+        free_rider=free_rider,
+        local_epochs=local_epochs,
+        partition_id=1,
+        seed=42,
+        batch_size=4,
+        free_rider_epochs=free_rider_epochs,
+    )
 
 
 def fit_once(server_round):
@@ -92,3 +100,57 @@ def test_barred_client_does_not_participate():
     global_weights = get_params(client.model)
     _, datasize, _ = client.fit(global_weights, stackelberg_config(50.0, barred="0,1"))
     assert datasize == 0
+
+
+def make_priced_client(free_rider=False):
+    client = make_client(free_rider=free_rider)
+    client.price_schedule = {1: 50.0, 2: 0.2}
+    return client
+
+
+def test_control_client_chooses_its_datasize_with_the_scheduled_price():
+    client = make_priced_client()
+    global_weights = get_params(client.model)
+    _, datasize, _ = client.fit(global_weights, {"server_round": 1})
+    assert datasize == 16
+
+
+def test_control_client_sends_the_global_model_when_the_price_is_too_low():
+    client = make_priced_client()
+    global_weights = get_params(client.model)
+    sent, datasize, _ = client.fit(global_weights, {"server_round": 2})
+    assert datasize == 0
+    for sent_layer, global_layer in zip(sent, global_weights):
+        np.testing.assert_array_equal(sent_layer, global_layer)
+
+
+def test_control_free_rider_claims_the_same_kind_of_datasize_but_does_not_train():
+    client = make_priced_client(free_rider=True)
+    global_weights = get_params(client.model)
+    sent, datasize, _ = client.fit(global_weights, {"server_round": 1})
+    assert datasize == 16
+    for sent_layer, global_layer in zip(sent, global_weights):
+        np.testing.assert_array_equal(sent_layer, global_layer)
+
+
+def test_low_effort_free_rider_trains_for_fewer_epochs_than_an_honest_client():
+    honest_with_one_epoch = make_client(free_rider=False, local_epochs=1)
+    low_effort = make_client(free_rider=True, local_epochs=2, free_rider_epochs=1)
+    honest_with_two_epochs = make_client(free_rider=False, local_epochs=2)
+    global_weights = get_params(honest_with_one_epoch.model)
+
+    expected, _, _ = honest_with_one_epoch.fit(global_weights, {"server_round": 1})
+    sent, datasize, _ = low_effort.fit(global_weights, {"server_round": 1})
+    full, _, _ = honest_with_two_epochs.fit(global_weights, {"server_round": 1})
+
+    assert datasize == 16
+    for sent_layer, expected_layer in zip(sent, expected):
+        np.testing.assert_array_equal(sent_layer, expected_layer)
+    assert any(not np.array_equal(a, b) for a, b in zip(sent, full))
+
+
+def test_low_effort_free_rider_does_not_send_the_global_model():
+    client = make_client(free_rider=True, local_epochs=2, free_rider_epochs=1)
+    global_weights = get_params(client.model)
+    sent, _, _ = client.fit(global_weights, {"server_round": 1})
+    assert any(not np.array_equal(a, b) for a, b in zip(sent, global_weights))

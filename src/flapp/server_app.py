@@ -15,8 +15,8 @@ from flapp.task import (
 )
 
 
-def make_centralized_eval_fn():
-    test_loader = load_test_set()
+def make_centralized_eval_fn(dataset="mnist"):
+    test_loader = load_test_set(dataset=dataset)
 
     def evaluate_fn(server_round, ndarrays, config):
         model = SimpleCNN()
@@ -27,8 +27,8 @@ def make_centralized_eval_fn():
     return evaluate_fn
 
 
-def make_shapley_utility_fn(seed):
-    validation_loader = load_validation_set(seed=seed)
+def make_shapley_utility_fn(seed, dataset="mnist"):
+    validation_loader = load_validation_set(seed=seed, dataset=dataset)
 
     def utility_fn(server_round, ndarrays, config):
         model = SimpleCNN()
@@ -39,10 +39,10 @@ def make_shapley_utility_fn(seed):
     return utility_fn
 
 
-def partition_sizes(num_clients, alpha, seed):
+def partition_sizes(num_clients, alpha, seed, dataset="mnist"):
     sizes = {}
     for partition_id in range(num_clients):
-        sizes[partition_id] = len(load_partition_dataset(partition_id, num_clients, alpha, seed))
+        sizes[partition_id] = len(load_partition_dataset(partition_id, num_clients, alpha, seed, dataset))
     return sizes
 
 
@@ -63,12 +63,12 @@ def make_strategy(strategy_name, common_arguments, settings):
         return strategy_class(
             **common_arguments,
             voting_rate=settings["voting_rate"],
-            shapley_eval_fn=make_shapley_utility_fn(seed),
+            shapley_eval_fn=make_shapley_utility_fn(seed, settings["dataset"]),
         )
     return strategy_class(
         **common_arguments,
         seed=seed,
-        dataset_sizes=partition_sizes(num_clients, settings["alpha"], seed),
+        dataset_sizes=partition_sizes(num_clients, settings["alpha"], seed, settings["dataset"]),
         num_rounds=settings["num_rounds"],
         compatibility_threshold=settings["compatibility_threshold"],
         model_size=settings["model_size"],
@@ -83,9 +83,10 @@ def build_server_app(
     num_free_riders,
     seed,
     alpha=0.5,
-    voting_rate=0.2,
+    voting_rate=0.3,
     compatibility_threshold=0.01,
     model_size=18406,
+    dataset="mnist",
 ):
     settings = {
         "num_clients": num_clients,
@@ -95,13 +96,14 @@ def build_server_app(
         "voting_rate": voting_rate,
         "compatibility_threshold": compatibility_threshold,
         "model_size": model_size,
+        "dataset": dataset,
     }
 
     def server_fn(context):
         torch.manual_seed(seed)
         initial_parameters = ndarrays_to_parameters(get_params(SimpleCNN()))
         common_arguments = {
-            "evaluate_fn": make_centralized_eval_fn(),
+            "evaluate_fn": make_centralized_eval_fn(dataset),
             "results_path": results_path,
             "num_clients": num_clients,
             "num_free_riders": num_free_riders,

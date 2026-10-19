@@ -13,7 +13,10 @@ from flapp.partition import partition_dirichlet
 
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 VALIDATION_FRACTION = 0.1
-MNIST_TRANSFORM = transforms.Compose([transforms.ToTensor(), transforms.Normalize((0.1307,), (0.3081,))])
+DATASETS = {
+    "mnist": (datasets.MNIST, 0.1307, 0.3081),
+    "fashion-mnist": (datasets.FashionMNIST, 0.2860, 0.3530),
+}
 
 
 class SimpleCNN(nn.Module):
@@ -106,34 +109,43 @@ def evaluate_metrics(model, loader, device="cpu"):
     }
 
 
-@functools.lru_cache(maxsize=1)
-def load_mnist_train():
-    return datasets.MNIST(str(DATA_DIR), train=True, download=True, transform=MNIST_TRANSFORM)
+def make_transform(dataset):
+    if dataset not in DATASETS:
+        raise ValueError(f"Unknown dataset {dataset!r}. Choose one of {list(DATASETS)}.")
+    dataset_class, mean, std = DATASETS[dataset]
+    return transforms.Compose([transforms.ToTensor(), transforms.Normalize((mean,), (std,))])
 
 
-@functools.lru_cache(maxsize=1)
-def load_mnist_test():
-    return datasets.MNIST(str(DATA_DIR), train=False, download=True, transform=MNIST_TRANSFORM)
+@functools.lru_cache(maxsize=None)
+def load_train_set(dataset="mnist"):
+    dataset_class = DATASETS[dataset][0]
+    return dataset_class(str(DATA_DIR), train=True, download=True, transform=make_transform(dataset))
 
 
-def validation_indices(seed, fraction=VALIDATION_FRACTION):
-    num_train = len(load_mnist_train())
+@functools.lru_cache(maxsize=None)
+def load_full_test_set(dataset="mnist"):
+    dataset_class = DATASETS[dataset][0]
+    return dataset_class(str(DATA_DIR), train=False, download=True, transform=make_transform(dataset))
+
+
+def validation_indices(seed, fraction=VALIDATION_FRACTION, dataset="mnist"):
+    num_train = len(load_train_set(dataset))
     num_validation = int(num_train * fraction)
     rng = np.random.default_rng(seed)
     return rng.choice(num_train, num_validation, replace=False)
 
 
-def training_indices(seed):
-    num_train = len(load_mnist_train())
+def training_indices(seed, dataset="mnist"):
+    num_train = len(load_train_set(dataset))
     is_validation = np.zeros(num_train, dtype=bool)
-    is_validation[validation_indices(seed)] = True
+    is_validation[validation_indices(seed, dataset=dataset)] = True
     return np.where(~is_validation)[0]
 
 
 @functools.lru_cache(maxsize=None)
-def load_partition_dataset(partition_id, num_partitions, alpha, seed):
-    train_set = load_mnist_train()
-    available = training_indices(seed)
+def load_partition_dataset(partition_id, num_partitions, alpha, seed, dataset="mnist"):
+    train_set = load_train_set(dataset)
+    available = training_indices(seed, dataset)
     labels = train_set.targets.numpy()[available]
     positions_per_client = partition_dirichlet(labels, num_partitions, alpha, seed)
     client_indices = available[positions_per_client[partition_id]]
@@ -145,11 +157,11 @@ def make_train_loader(dataset, batch_size, shuffle_seed):
     return DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator)
 
 
-def load_test_set(batch_size=512):
-    return DataLoader(load_mnist_test(), batch_size=batch_size)
+def load_test_set(batch_size=512, dataset="mnist"):
+    return DataLoader(load_full_test_set(dataset), batch_size=batch_size)
 
 
-def load_validation_set(fraction=VALIDATION_FRACTION, seed=0, batch_size=512):
-    train_set = load_mnist_train()
-    indices = validation_indices(seed, fraction)
+def load_validation_set(fraction=VALIDATION_FRACTION, seed=0, batch_size=512, dataset="mnist"):
+    train_set = load_train_set(dataset)
+    indices = validation_indices(seed, fraction, dataset)
     return DataLoader(Subset(train_set, indices), batch_size=batch_size)
