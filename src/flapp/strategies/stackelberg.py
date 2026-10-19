@@ -99,10 +99,14 @@ class StackelbergStrategy(CentralEvalStrategy):
         for client_id in dataset_sizes:
             self.client_params[client_id] = economics.client_parameters(seed, client_id)
         self.total_time = 0.0
+        self.calibration_seconds = 0.0
+        self.price_seconds = 0.0
         if self.client_params:
+            start_time = time.perf_counter()
             self.total_time = economics.calibrate_total_time(
                 num_rounds, self.client_params, self.dataset_sizes, self.model_size
             )
+            self.calibration_seconds = time.perf_counter() - start_time
 
     def active_client_params(self):
         active = {}
@@ -119,7 +123,9 @@ class StackelbergStrategy(CentralEvalStrategy):
 
     def configure_fit(self, server_round, parameters, client_manager):
         self.current_global = parameters_to_ndarrays(parameters)
+        start_time = time.perf_counter()
         self.current_price = self.price_for_round(server_round)
+        self.price_seconds = time.perf_counter() - start_time
         barred_text = ",".join(str(client_id) for client_id in sorted(self.barred))
         config = {
             "server_round": server_round,
@@ -172,6 +178,7 @@ class StackelbergStrategy(CentralEvalStrategy):
         else:
             aggregated = self.current_global
 
+        aggregate_seconds = time.perf_counter() - start_time
         self.last_extra = {
             "client_scores": scores_as_strings(compatibilities),
             "detected_free_riders": sorted(self.barred),
@@ -182,7 +189,10 @@ class StackelbergStrategy(CentralEvalStrategy):
                 "num_participated": len(included),
                 "rewards": scores_as_strings(payments),
                 "payment_cost": sum(payments.values()),
-                "aggregate_seconds": time.perf_counter() - start_time,
+                "aggregate_seconds": aggregate_seconds,
+                "price_seconds": self.price_seconds,
+                "calibration_seconds": self.calibration_seconds,
+                "server_seconds": aggregate_seconds + self.price_seconds,
             },
         }
         return ndarrays_to_parameters(aggregated), {}

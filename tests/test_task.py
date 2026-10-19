@@ -68,3 +68,34 @@ def test_get_params_returns_copies_not_views_of_the_model():
         for tensor in model.parameters():
             tensor.add_(1.0)
     np.testing.assert_array_equal(params[0], before)
+
+
+def test_both_datasets_are_registered_with_their_normalization():
+    from flapp.task import DATASETS
+
+    assert set(DATASETS) == {"mnist", "fashion-mnist"}
+    assert DATASETS["mnist"][1:] == (0.1307, 0.3081)
+    assert DATASETS["fashion-mnist"][1:] == (0.2860, 0.3530)
+
+
+def test_unknown_dataset_raises():
+    import pytest
+
+    from flapp.task import make_transform
+
+    with pytest.raises(ValueError):
+        make_transform("cifar-10")
+
+
+def test_fashion_mnist_partitions_do_not_overlap_with_the_validation_set():
+    from flapp.task import load_partition_dataset, validation_indices
+
+    seed = 42
+    validation = set(validation_indices(seed, dataset="fashion-mnist").tolist())
+    seen = set()
+    for partition_id in range(10):
+        indices = set(load_partition_dataset(partition_id, 10, 0.5, seed, "fashion-mnist").indices.tolist())
+        assert not indices & validation
+        assert not indices & seen
+        seen |= indices
+    assert len(seen) + len(validation) == 60000

@@ -110,3 +110,25 @@ def test_aggregate_fit_does_not_depend_on_the_order_clients_answer():
 def test_missing_eval_fn_warns():
     with pytest.warns(UserWarning):
         ShapleyWeightedStrategy(evaluate_fn=distance_utility, results_path=None, num_clients=2, num_free_riders=0)
+
+
+def test_default_voting_rate_flags_exactly_three_of_ten_clients():
+    values = {}
+    for client_id in range(10):
+        values[client_id] = client_id / 10
+    assert ShapleyWeightedStrategy.__init__.__kwdefaults__["voting_rate"] == 0.3
+    assert lowest_contributions(values, 0.3) == [0, 1, 2]
+
+
+def test_voting_rate_of_twenty_percent_flags_only_two_of_ten_clients():
+    values = {}
+    for client_id in range(10):
+        values[client_id] = client_id / 10
+    assert lowest_contributions(values, 0.2) == [0, 1]
+
+
+def test_server_seconds_is_logged_for_shapley():
+    strategy = make_strategy()
+    strategy.aggregate_fit(1, five_clients_with_one_free_rider(), [])
+    metadata = strategy._round_extra()["metadata"]
+    assert metadata["server_seconds"] == metadata["aggregate_seconds"]

@@ -105,3 +105,13 @@ def test_strategy_calibrates_a_positive_time_budget():
     strategy = make_strategy()
     assert strategy.total_time > 0
     assert strategy.price_for_round(1) > 0
+
+
+def test_server_seconds_includes_the_price_computation():
+    strategy = make_strategy()
+    strategy.price_seconds = 0.5
+    strategy.aggregate_fit(1, results_with_one_free_rider(), [])
+    metadata = strategy._round_extra()["metadata"]
+    assert metadata["server_seconds"] == pytest.approx(metadata["aggregate_seconds"] + 0.5)
+    assert metadata["price_seconds"] == 0.5
+    assert metadata["calibration_seconds"] > 0

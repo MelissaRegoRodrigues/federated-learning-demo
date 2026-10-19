@@ -12,8 +12,23 @@ def make_round_seed(seed, partition_id, server_round):
 
 
 class FlowerClient(NumPyClient):
-    def __init__(self, dataset, free_rider, local_epochs, partition_id, seed=0, batch_size=32, learning_rate=0.01):
+    def __init__(
+        self,
+        dataset,
+        free_rider,
+        local_epochs,
+        partition_id,
+        seed=0,
+        batch_size=32,
+        learning_rate=0.01,
+        price_schedule=None,
+        model_size=18406,
+        free_rider_epochs=None,
+    ):
         self.dataset = dataset
+        self.free_rider_epochs = free_rider_epochs
+        self.price_schedule = price_schedule
+        self.model_size = model_size
         self.free_rider = free_rider
         self.local_epochs = local_epochs
         self.partition_id = partition_id
@@ -33,6 +48,10 @@ class FlowerClient(NumPyClient):
         return self.partition_id in barred_ids
 
     def chosen_datasize(self, config):
+        if self.price_schedule is not None:
+            params = economics.client_parameters(self.seed, self.partition_id)
+            price = self.price_schedule[config["server_round"]]
+            return economics.best_datasize(price, config["server_round"], params, self.model_size, len(self.dataset))
         if "price" not in config:
             return len(self.dataset)
         params = economics.client_parameters(self.seed, self.partition_id)
@@ -53,22 +72,39 @@ class FlowerClient(NumPyClient):
             return parameters, 0, metrics
 
         datasize = self.chosen_datasize(config)
-        if datasize == 0 or self.free_rider:
+        if datasize == 0:
             return parameters, datasize, metrics
+        if self.free_rider and self.free_rider_epochs is None:
+            return parameters, datasize, metrics
+
+        epochs = self.local_epochs
+        if self.free_rider:
+            epochs = self.free_rider_epochs
 
         server_round = config.get("server_round", 0)
         round_seed = make_round_seed(self.seed, self.partition_id, server_round)
         set_params(self.model, parameters)
         loader = make_train_loader(self.training_data(datasize, round_seed), self.batch_size, round_seed)
-        train(self.model, loader, epochs=self.local_epochs, lr=self.learning_rate)
+        train(self.model, loader, epochs=epochs, lr=self.learning_rate)
         return get_params(self.model), datasize, metrics
 
 
-def build_client_app(alpha, seed, num_free_riders, local_epochs, batch_size=32, learning_rate=0.01):
+def build_client_app(
+    alpha,
+    seed,
+    num_free_riders,
+    local_epochs,
+    batch_size=32,
+    learning_rate=0.01,
+    price_schedule=None,
+    model_size=18406,
+    dataset_name="mnist",
+    free_rider_epochs=None,
+):
     def client_fn(context):
         partition_id = context.node_config["partition-id"]
         num_partitions = context.node_config["num-partitions"]
-        dataset = load_partition_dataset(partition_id, num_partitions, alpha, seed)
+        dataset = load_partition_dataset(partition_id, num_partitions, alpha, seed, dataset_name)
         client = FlowerClient(
             dataset,
             is_free_rider(partition_id, num_free_riders),
@@ -77,6 +113,9 @@ def build_client_app(alpha, seed, num_free_riders, local_epochs, batch_size=32, 
             seed=seed,
             batch_size=batch_size,
             learning_rate=learning_rate,
+            price_schedule=price_schedule,
+            model_size=model_size,
+            free_rider_epochs=free_rider_epochs,
         )
         return client.to_client()
 

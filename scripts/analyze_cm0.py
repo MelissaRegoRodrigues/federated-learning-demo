@@ -43,6 +43,9 @@ def main():
     else:
         lower = 0.0
     upper = min(all_honest)
+    if lower >= upper:
+        print(f"Nenhum Cm0 separa os grupos: o maior Cm de free-rider ({lower:.4f}) não é menor que o menor Cm de honesto ({upper:.4f}).")
+        return
     print(f"Qualquer Cm0 em ({lower:.4f}, {upper:.4f}] exclui exatamente os mesmos clientes em todas as execuções.")
 
 

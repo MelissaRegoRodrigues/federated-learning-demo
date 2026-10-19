@@ -6,8 +6,8 @@ In FL, many clients (phones, hospitals, sensors, ...) each train a model
 on their own local data and send only the *trained model weights* to a
 server, which aggregates them into one global model — the raw data never
 leaves the client. This is great for privacy, but it opens a door: a
-client can misbehave (send garbage, train too little, or send noise)
-and the server has to infer this purely from the weights it receives.
+client can misbehave, for example by returning the global model without training it
+(a free-rider), and the server has to infer this purely from the weights it receives.
 
 ## What is Flower, and why this project uses it
 

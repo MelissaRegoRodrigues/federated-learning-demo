@@ -12,7 +12,7 @@ from flapp.strategies.base import (
     weighted_average_ndarrays,
 )
 
-VOTING_RATE = 0.2
+VOTING_RATE = 0.3
 
 
 def data_size_weights(sizes, members):
@@ -106,12 +106,14 @@ class ShapleyWeightedStrategy(CentralEvalStrategy):
         weights = contribution_weights(contributions)
         aggregated = weighted_average_ndarrays(models, weights)
 
+        aggregate_seconds = time.perf_counter() - start_time
         self.last_extra = {
             "client_scores": scores_as_strings(values),
             "detected_free_riders": flagged,
             "metadata": {
                 "rewards": scores_as_strings(weights),
-                "aggregate_seconds": time.perf_counter() - start_time,
+                "aggregate_seconds": aggregate_seconds,
+                "server_seconds": aggregate_seconds,
             },
         }
         return ndarrays_to_parameters(aggregated), {}
