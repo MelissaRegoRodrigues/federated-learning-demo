@@ -42,11 +42,11 @@ Stackelberg of a seed runs before its control, because the control reads the pri
 run_comparison() {
   base=$1; seeds=$2; shift 2
   for seed in $seeds; do
-    python scripts/run_experiment.py --strategy stackelberg --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --strategy fedavg --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --strategy shapley --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --strategy shapley --seed $seed --shapley-voting-rate 0 --results-dir $base/shapley_v0 "$@"
-    python scripts/run_experiment.py --strategy fedavg --seed $seed --results-dir $base/control --price-from $base/stackelberg_seed$seed.json "$@"
+    python scripts/run_experiment.py --resume --strategy stackelberg --seed $seed --results-dir $base "$@"
+    python scripts/run_experiment.py --resume --strategy fedavg --seed $seed --results-dir $base "$@"
+    python scripts/run_experiment.py --resume --strategy shapley --seed $seed --results-dir $base "$@"
+    python scripts/run_experiment.py --resume --strategy shapley --seed $seed --shapley-voting-rate 0 --results-dir $base/shapley_v0 "$@"
+    python scripts/run_experiment.py --resume --strategy fedavg --seed $seed --results-dir $base/control --price-from $base/stackelberg_seed$seed.json "$@"
   done
 }
 
@@ -55,7 +55,9 @@ run_comparison results/fashion_low_effort "42 43 44" --dataset fashion-mnist --f
 ```
 
 Two scenarios: MNIST with silent free-riders (5 seeds, about 8 hours) and Fashion-MNIST with low-effort
-free-riders (3 seeds, about 5 hours). Run one experiment at a time.
+free-riders (3 seeds, about 5 hours). Run one experiment at a time. If the execution is interrupted, run
+the same commands again: `--resume` skips the experiments that are already complete (an interrupted
+experiment starts over).
 
 Optional extras, not needed for the main comparison: Shapley with voting rate 0.2
 (`--shapley-voting-rate 0.2 --results-dir results/shapley_v02`) and a scenario without free-riders
@@ -99,7 +101,7 @@ pytest tests/
 ```
 src/flapp/
 ├── task.py             model, MNIST loading, training and metrics
-├── partition.py        Dirichlet non-IID split
+├── partition.py        Dirichlet non-IID split (Flower's DirichletPartitioner)
 ├── free_rider.py       which clients are free-riders (they return the global model)
 ├── economics.py        cost and payment model of the Stackelberg game (EntroCFL)
 ├── fairness.py         distance between rewards and the reference vector

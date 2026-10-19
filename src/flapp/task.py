@@ -143,13 +143,21 @@ def training_indices(seed, dataset="mnist"):
 
 
 @functools.lru_cache(maxsize=None)
-def load_partition_dataset(partition_id, num_partitions, alpha, seed, dataset="mnist"):
+def partition_all_clients(num_partitions, alpha, seed, dataset="mnist"):
     train_set = load_train_set(dataset)
     available = training_indices(seed, dataset)
     labels = train_set.targets.numpy()[available]
     positions_per_client = partition_dirichlet(labels, num_partitions, alpha, seed)
-    client_indices = available[positions_per_client[partition_id]]
-    return Subset(train_set, client_indices)
+    indices_per_client = []
+    for positions in positions_per_client:
+        indices_per_client.append(available[positions])
+    return indices_per_client
+
+
+def load_partition_dataset(partition_id, num_partitions, alpha, seed, dataset="mnist"):
+    train_set = load_train_set(dataset)
+    indices_per_client = partition_all_clients(num_partitions, alpha, seed, dataset)
+    return Subset(train_set, indices_per_client[partition_id])
 
 
 def make_train_loader(dataset, batch_size, shuffle_seed):

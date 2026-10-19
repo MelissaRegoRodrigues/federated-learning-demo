@@ -40,12 +40,13 @@ def test_different_seeds_produce_different_partitions():
 
 
 def test_every_client_gets_at_least_the_minimum():
-    labels = _labels(n=300)
-    result = partition_dirichlet(labels, num_clients=10, alpha=0.1, seed=3, min_partition_size=10)
+    labels = _labels(n=3000)
+    result = partition_dirichlet(labels, num_clients=10, alpha=0.5, seed=3, min_partition_size=10)
     for indices in result:
         assert len(indices) >= 10
 
 
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_impossible_minimum_raises():
     labels = _labels(n=50)
     with pytest.raises(ValueError):

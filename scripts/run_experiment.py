@@ -40,6 +40,7 @@ def parse_args():
     )
     parser.add_argument("--low-effort-epochs", type=int, default=1)
     parser.add_argument("--results-dir", default="results")
+    parser.add_argument("--resume", action="store_true", help="Skip this run if its result file is already complete.")
     parser.add_argument(
         "--price-from",
         default=None,
@@ -48,6 +49,16 @@ def parse_args():
     )
     parser.add_argument("--client-cpus", type=int, default=1, help="CPUs per simulated client.")
     return parser.parse_args()
+
+
+def run_is_complete(results_path, num_rounds):
+    if not results_path.exists():
+        return False
+    data = json.loads(results_path.read_text())
+    for row in data["rounds"]:
+        if row["round"] == num_rounds:
+            return True
+    return False
 
 
 def check_run_is_complete(results_path, num_rounds):
@@ -109,6 +120,10 @@ def make_server_app(args, results_path):
 
 def main():
     args = parse_args()
+    existing_path = Path(args.results_dir) / results_filename(args.strategy, args.seed)
+    if args.resume and run_is_complete(existing_path, args.num_rounds):
+        print(f"Já completo, pulando: {existing_path}")
+        return
     results_path = prepare_results_path(args)
     run_simulation(
         server_app=make_server_app(args, results_path),

@@ -138,6 +138,16 @@ def print_four_metrics(runs):
         print(f"  {metric:10s} {mean_and_std(values)}   por semente: {rounded}")
 
 
+def print_compact_table(groups):
+    print_title("Resumo: rodada final, média ± desvio-padrão entre as sementes")
+    print(f"{'grupo':32s} {'n':>2s}  {'acurácia':>15s}  {'precisão':>15s}  {'recall':>15s}  {'F1':>15s}")
+    for label, runs in groups.items():
+        cells = []
+        for metric in METRICS:
+            cells.append(mean_and_std(final_values(runs, metric)))
+        print(f"{label:32s} {len(runs):>2d}  {cells[0]:>15s}  {cells[1]:>15s}  {cells[2]:>15s}  {cells[3]:>15s}")
+
+
 def print_model_metrics(groups):
     print_title("Desempenho do modelo global (rodada final, conjunto de teste)")
     for label, runs in groups.items():
@@ -424,6 +434,7 @@ def main():
 
     groups = load_groups()
 
+    print_compact_table(groups)
     print_model_metrics(groups)
     print_statistical_tests(groups)
     print_gains(groups)

@@ -31,9 +31,10 @@ $$
 | $\alpha$ | concentration: smaller means more skewed clients | `alpha` (`--alpha`, 0.5) |
 | $\mathbf{p}_k$ | shares of class $k$ across the clients | `proportions_per_class[k]` |
 
-The split is implemented in this repository (`partition_dirichlet`); it is not Flower's
-`DirichletPartitioner`. If any client ends up with fewer than 10 samples (`MIN_PARTITION_SIZE`),
-the whole split is drawn again, at most 1000 times, and then an error is raised.
+The split is made by Flower's `DirichletPartitioner` (`flwr-datasets`), applied to the labels, with
+`partition_by="label"`, `min_partition_size=10`, `self_balancing=False` and `shuffle=True`. If any client
+ends up with fewer than 10 samples, the partitioner draws the whole split again, at most 10 times, and then
+raises an error.
 
 Before splitting, 10% of the training set (`VALIDATION_FRACTION`) is held out on the server as
 the set used to measure Shapley contributions, so no client trains on it.
@@ -215,7 +216,7 @@ What the source papers leave open, and what the code does:
 | Validators in [21] | one (the server) | [21] uses several validation clients. |
 | Voting rate $V$ of Shapley | 0.3 in the main runs, 0.2 as sensitivity | [21] finds the best $V$ slightly above the malicious rate (10% in its experiments, $V = 20\%$); here the free-rider rate is 30%. |
 | Baselines of the gain | Stackelberg: FedAvg control (same data size, weights proportional to the declared size, no exclusion). Shapley: the same mechanism with $V = 0$ (full data, uniform weights, no exclusion) | Each mechanism is compared with its own no-exclusion baseline with the same weight rule, so that the gain measures the exclusion only. The ablation of a component follows the design of [21] (ConAvg and KDAvg against FedAvg); the baselines themselves are not part of any source paper. |
-| Minimum 10 samples per client, redrawing the whole split up to 1000 times | own implementation; 10 is also the default `min_partition_size` of Flower's `DirichletPartitioner` | no effect on seeds 42–46 (smallest client: 917 samples). |
+| Minimum 10 samples per client, no self-balancing | the defaults of Flower's `DirichletPartitioner`; self-balancing is not part of the formulation of [63] | no effect on seeds 42–46 (smallest client: 917 samples). |
 
 ## Limitations of the comparison
 
@@ -277,7 +278,9 @@ coalition models on the validation set.
 
 **8. The aggregation weights differ between mechanisms.** FedAvg weights the clients by $n_i$, Shapley
 gives equal weight to the clients it does not exclude, and Stackelberg weights the included clients by
-$D_i^*$. These are the rules of McMahan et al., [21] and [29].
+$D_i^*$. These are the rules of McMahan et al., [21] and [29]. The exclusion also differs in time: in
+Stackelberg a client that fails the compatibility check is barred from all later rounds ([29]), while
+Shapley decides again in every round, without memory ([21]).
 
 **9. Adding a mechanism is not only a subclass.** A new mechanism needs a `Strategy` subclass, an
 entry in `STRATEGIES`, a branch in `make_strategy` (`src/flapp/server_app.py`) and an entry in the
