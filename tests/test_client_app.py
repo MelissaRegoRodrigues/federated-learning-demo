@@ -154,3 +154,61 @@ def test_low_effort_free_rider_does_not_send_the_global_model():
     global_weights = get_params(client.model)
     sent, _, _ = client.fit(global_weights, {"server_round": 1})
     assert any(not np.array_equal(a, b) for a, b in zip(sent, global_weights))
+
+
+def test_noisy_free_rider_sends_the_global_model_plus_noise_without_training():
+    client = make_client(free_rider=True)
+    client.noise_std = 0.05
+    start = get_params(client.model)
+    params, num_examples, metrics = client.fit(start, {"server_round": 2})
+    assert num_examples == 16
+    differences = [np.abs(a - b).max() for a, b in zip(params, start)]
+    assert all(difference > 0 for difference in differences)
+    assert all(difference < 0.5 for difference in differences)
+
+
+def test_noisy_free_rider_is_reproducible_for_the_same_round():
+    first = make_client(free_rider=True)
+    first.noise_std = 0.05
+    second = make_client(free_rider=True)
+    second.noise_std = 0.05
+    start = get_params(first.model)
+    a, _, _ = first.fit(start, {"server_round": 4})
+    b, _, _ = second.fit(start, {"server_round": 4})
+    for left, right in zip(a, b):
+        np.testing.assert_array_equal(left, right)
+
+
+def test_honest_client_ignores_noise_std():
+    client = make_client(free_rider=False)
+    client.noise_std = 0.05
+    start = get_params(client.model)
+    params, _, _ = client.fit(start, {"server_round": 1})
+    differences = [np.abs(a - b).max() for a, b in zip(params, start)]
+    assert max(differences) > 0.0
+
+
+def make_large_client(full_data):
+    torch.manual_seed(0)
+    dataset = TensorDataset(torch.randn(200, 1, 28, 28), torch.randint(0, 10, (200,)))
+    return FlowerClient(
+        dataset, free_rider=False, local_epochs=1, partition_id=1, seed=42, batch_size=20, full_data=full_data
+    )
+
+
+def test_by_default_the_client_trains_on_less_data_than_it_has_when_the_price_is_low():
+    client = make_large_client(full_data=False)
+    _, datasize, _ = client.fit(get_params(client.model), stackelberg_config(1.0))
+    assert 0 < datasize < 200
+
+
+def test_full_data_makes_an_accepted_client_use_all_its_data():
+    client = make_large_client(full_data=True)
+    _, datasize, _ = client.fit(get_params(client.model), stackelberg_config(1.0))
+    assert datasize == 200
+
+
+def test_full_data_does_not_make_a_client_join_when_the_price_is_too_low():
+    client = make_large_client(full_data=True)
+    _, datasize, _ = client.fit(get_params(client.model), stackelberg_config(0.2))
+    assert datasize == 0

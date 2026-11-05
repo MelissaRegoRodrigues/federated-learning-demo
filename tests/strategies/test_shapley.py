@@ -132,3 +132,48 @@ def test_server_seconds_is_logged_for_shapley():
     strategy.aggregate_fit(1, five_clients_with_one_free_rider(), [])
     metadata = strategy._round_extra()["metadata"]
     assert metadata["server_seconds"] == metadata["aggregate_seconds"]
+
+
+def distance_loss_utility(server_round, ndarrays, config):
+    target = np.array([1.0, 1.0])
+    distance = float(np.linalg.norm(ndarrays[0] - target))
+    return distance, {"accuracy": 0.5}
+
+
+def test_loss_utility_is_the_negative_loss():
+    strategy = ShapleyWeightedStrategy(
+        evaluate_fn=distance_loss_utility,
+        shapley_eval_fn=distance_loss_utility,
+        results_path=None,
+        num_clients=5,
+        num_free_riders=1,
+        utility="loss",
+    )
+    assert strategy.evaluate_utility([np.array([1.0, 1.0])]) == 0.0
+    assert strategy.evaluate_utility([np.array([4.0, 5.0])]) == pytest.approx(-5.0)
+
+
+def test_loss_utility_still_flags_the_free_rider_when_accuracy_is_flat():
+    strategy = ShapleyWeightedStrategy(
+        evaluate_fn=distance_loss_utility,
+        shapley_eval_fn=distance_loss_utility,
+        results_path=None,
+        num_clients=5,
+        num_free_riders=1,
+        voting_rate=0.2,
+        utility="loss",
+    )
+    strategy.aggregate_fit(1, five_clients_with_one_free_rider(), [])
+    assert strategy.last_extra["detected_free_riders"] == [0]
+
+
+def test_unknown_utility_is_rejected():
+    with pytest.raises(ValueError):
+        ShapleyWeightedStrategy(
+            evaluate_fn=distance_utility,
+            shapley_eval_fn=distance_utility,
+            results_path=None,
+            num_clients=5,
+            num_free_riders=1,
+            utility="f1",
+        )

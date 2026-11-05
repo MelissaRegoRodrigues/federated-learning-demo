@@ -28,15 +28,40 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--learning-rate", type=float, default=0.01)
     parser.add_argument("--shapley-voting-rate", type=float, default=0.3, help="Shapley: fraction of lowest contributions excluded.")
+    parser.add_argument(
+        "--model",
+        choices=["cnn", "small"],
+        default="cnn",
+        help="cnn: 421,642 parameters. small: 18,406 parameters, the model size of the cost model of [29].",
+    )
+    parser.add_argument(
+        "--exclude-clients",
+        default="",
+        help="FedAvg only: comma-separated client ids whose update is ignored (perfect detection of the free-riders).",
+    )
+    parser.add_argument(
+        "--shapley-utility",
+        choices=["accuracy", "loss"],
+        default="accuracy",
+        help="Shapley: metric of the validation set used as the utility of a coalition.",
+    )
     parser.add_argument("--stackelberg-cm0", type=float, default=0.01, help="Stackelberg: compatibility threshold Cm0.")
     parser.add_argument("--stackelberg-model-size", type=int, default=18406, help="Stackelberg: model size in the cost model.")
     parser.add_argument("--dataset", choices=["mnist", "fashion-mnist"], default="mnist")
     parser.add_argument(
         "--free-rider-type",
-        choices=["silent", "low-effort"],
+        choices=["silent", "low-effort", "noisy"],
         default="silent",
         help="silent: returns the global model without training. "
-        "low-effort: trains for --low-effort-epochs local epochs instead of --local-epochs.",
+        "low-effort: trains for --low-effort-epochs local epochs instead of --local-epochs. "
+        "noisy: sends the global model plus Gaussian noise (--noise-std), a check that the mechanisms "
+        "do detect a free-rider that harms the model.",
+    )
+    parser.add_argument("--noise-std", type=float, default=0.05)
+    parser.add_argument(
+        "--full-data",
+        action="store_true",
+        help="Stackelberg ablation: clients accepted by the game train with all their data instead of the price-chosen amount.",
     )
     parser.add_argument("--low-effort-epochs", type=int, default=1)
     parser.add_argument("--results-dir", default="results")
@@ -85,6 +110,9 @@ def make_client_app(args):
     free_rider_epochs = None
     if args.free_rider_type == "low-effort":
         free_rider_epochs = args.low_effort_epochs
+    noise_std = None
+    if args.free_rider_type == "noisy":
+        noise_std = args.noise_std
     price_schedule = None
     if args.price_from is not None:
         price_schedule = load_price_schedule(args.price_from)
@@ -99,7 +127,16 @@ def make_client_app(args):
         model_size=args.stackelberg_model_size,
         dataset_name=args.dataset,
         free_rider_epochs=free_rider_epochs,
+        model_name=args.model,
+        noise_std=noise_std,
+        full_data=args.full_data,
     )
+
+
+def excluded_clients(args):
+    if args.exclude_clients == "":
+        return ()
+    return tuple(int(text) for text in args.exclude_clients.split(","))
 
 
 def make_server_app(args, results_path):
@@ -115,6 +152,9 @@ def make_server_app(args, results_path):
         compatibility_threshold=args.stackelberg_cm0,
         model_size=args.stackelberg_model_size,
         dataset=args.dataset,
+        shapley_utility=args.shapley_utility,
+        model_name=args.model,
+        exclude_clients=excluded_clients(args),
     )
 
 

@@ -13,6 +13,7 @@ from flapp.strategies.base import (
 )
 
 VOTING_RATE = 0.3
+UTILITIES = ("accuracy", "loss")
 
 
 def data_size_weights(sizes, members):
@@ -57,9 +58,12 @@ def contribution_weights(contributions):
 
 
 class ShapleyWeightedStrategy(CentralEvalStrategy):
-    def __init__(self, *, voting_rate=VOTING_RATE, shapley_eval_fn=None, **kwargs):
+    def __init__(self, *, voting_rate=VOTING_RATE, shapley_eval_fn=None, utility="accuracy", **kwargs):
         super().__init__(strategy_name="shapley", **kwargs)
+        if utility not in UTILITIES:
+            raise ValueError(f"utility must be one of {UTILITIES}, got {utility!r}")
         self.voting_rate = voting_rate
+        self.utility = utility
         if shapley_eval_fn is None:
             warnings.warn(
                 "ShapleyWeightedStrategy: shapley_eval_fn not provided, using the test set "
@@ -78,6 +82,10 @@ class ShapleyWeightedStrategy(CentralEvalStrategy):
         result = evaluate(0, ndarrays, {})
         if result is None:
             return 0.0
+        if self.utility == "loss":
+            # A lower loss is better, so the negative loss is the utility. It changes in small steps
+            # that accuracy does not see when the model is close to 100%.
+            return -result[0]
         return result[1]["accuracy"]
 
     def leave_one_out_values(self, models, sizes):
