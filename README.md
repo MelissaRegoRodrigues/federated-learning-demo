@@ -51,11 +51,11 @@ run_comparison() {
 }
 
 run_comparison results "42 43 44 45 46"
-run_comparison results/fashion_low_effort "42 43 44" --dataset fashion-mnist --free-rider-type low-effort
 ```
 
-Two scenarios: MNIST with silent free-riders (5 seeds, about 8 hours) and Fashion-MNIST with low-effort
-free-riders (3 seeds, about 5 hours). Run one experiment at a time. If the execution is interrupted, run
+One scenario: MNIST with silent free-riders (5 seeds, about 8 hours). Fashion-MNIST is implemented
+(`--dataset fashion-mnist`) but no Fashion-MNIST results are kept in this repository; it is left as future
+work. Run one experiment at a time. If the execution is interrupted, run
 the same commands again: `--resume` skips the experiments that are already complete (an interrupted
 experiment starts over).
 
@@ -69,8 +69,6 @@ Optional extras, not needed for the main comparison: Shapley with voting rate 0.
   mechanism.
 - `results/control/`: FedAvg where every client trains on the amount of data it would choose in the
   Stackelberg game (the game without the compatibility check), the baseline of the Stackelberg mechanism.
-- `results/fashion_low_effort/`: the same comparison on Fashion-MNIST, with low-effort free-riders
-  (they train 1 epoch instead of 2).
 
 Run `python scripts/run_experiment.py --help` to see every option.
 
