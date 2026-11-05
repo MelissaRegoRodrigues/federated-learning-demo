@@ -188,22 +188,73 @@ def paired_test(first_runs, second_runs, metric):
         effect = differences.mean() / differences.std(ddof=1)
     else:
         effect = float("nan")
-    return differences.mean(), t_p, wilcoxon_p, effect
+    ci_low, ci_high = confidence_interval(differences)
+    return differences.mean(), t_p, wilcoxon_p, effect, ci_low, ci_high
+
+
+def confidence_interval(differences, level=0.95):
+    # IC da diferença média pela distribuição t (mesma base do t pareado).
+    count = len(differences)
+    mean = differences.mean()
+    spread = differences.std(ddof=1)
+    if spread == 0:
+        return mean, mean
+    margin = stats.t.ppf((1 + level) / 2, count - 1) * spread / np.sqrt(count)
+    return mean - margin, mean + margin
+
+
+def holm_adjust(p_values):
+    # Correção de Holm-Bonferroni. Devolve os p ajustados na mesma ordem; NaN fica NaN e não conta.
+    valid = []
+    for index, value in enumerate(p_values):
+        if not is_nan(value):
+            valid.append(index)
+    valid.sort(key=lambda index: p_values[index])
+    total = len(valid)
+    adjusted = [float("nan")] * len(p_values)
+    running_max = 0.0
+    for position, index in enumerate(valid):
+        candidate = (total - position) * p_values[index]
+        running_max = max(running_max, candidate)  # o ajustado nunca diminui ao longo do ranking
+        adjusted[index] = min(1.0, running_max)
+    return adjusted
 
 
 def print_statistical_tests(groups):
-    print_title("Testes pareados por semente (rodada final): diferença média, t pareado, Wilcoxon, d_z")
+    print_title("Testes pareados por semente (rodada final): diferença média [IC 95%], p bruto e p ajustado (Holm), d_z")
+    rows = []
     for first, second in COMPARISONS:
         if first not in groups or second not in groups:
             continue
-        print(f"{first} - {second}")
         for metric in METRICS:
             result = paired_test(groups[first], groups[second], metric)
-            if result is None:
-                print(f"  {metric:10s} poucas sementes em comum")
-                continue
-            difference, t_p, wilcoxon_p, effect = result
-            print(f"  {metric:10s} diferença {difference:+.4f}   t p = {t_p:.4f}   Wilcoxon p = {wilcoxon_p:.4f}   d_z = {effect:.2f}")
+            rows.append((first, second, metric, result))
+
+    # Uma família de testes por execução do script (um cenário): todas as comparações x métricas.
+    t_values = []
+    wilcoxon_values = []
+    for _, _, _, result in rows:
+        if result is not None:
+            t_values.append(result[1])
+            wilcoxon_values.append(result[2])
+    t_adjusted = iter(holm_adjust(t_values))
+    wilcoxon_adjusted = iter(holm_adjust(wilcoxon_values))
+    print(f"Família de Holm: {len(t_values)} testes neste cenário. Com n=5 o menor p do Wilcoxon exato é 0,0625.")
+
+    current_pair = None
+    for first, second, metric, result in rows:
+        if (first, second) != current_pair:
+            print(f"{first} - {second}")
+            current_pair = (first, second)
+        if result is None:
+            print(f"  {metric:10s} poucas sementes em comum")
+            continue
+        difference, t_p, wilcoxon_p, effect, ci_low, ci_high = result
+        print(
+            f"  {metric:10s} diferença {difference:+.4f} [{ci_low:+.4f}, {ci_high:+.4f}]   "
+            f"t p = {t_p:.4f} (Holm {next(t_adjusted):.4f})   "
+            f"Wilcoxon p = {wilcoxon_p:.4f} (Holm {next(wilcoxon_adjusted):.4f})   d_z = {effect:.2f}"
+        )
 
 
 def detection_counts(runs):

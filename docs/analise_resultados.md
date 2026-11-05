@@ -224,7 +224,7 @@ Controles rodados em todos os cenários (5 sementes cada): **`shapley_v0`** (Sha
 
 | Critério | FedAvg | Shapley | Stackelberg (dados completos) |
 |---|---|---|---|
-| Acurácia/precisão/recall/F1, α=0,5, passivos | referência | empatado | **+0,1 a +0,7 pp** (silent, fr50) |
+| Acurácia/precisão/recall/F1, α=0,5, passivos | referência | empatado +0,1 a +0,7 pp (silent, fr50), pequeno |
 | Acurácia/F1, α=0,1, passivos | pior em média | melhor em média, n.s. | melhor em média, n.s. |
 | Low-effort | referência | −0,7 pp (α=0,1), n.s. | igual ao FedAvg |
 | Noisy (ataque ativo) | referência | **+0,5 / +5,2 pp** | igual ao FedAvg |
@@ -239,7 +239,7 @@ Nenhum mecanismo domina os outros. O Stackelberg ganha em recompensa justa e em 
 
 ## 9. Conclusões que o experimento sustenta
 
-1. **O Stackelberg detecta com precisão e recall de 100% os free-riders silenciosos (3 de 10 e 5 de 10)** e, com os mesmos dados dos demais mecanismos, iguala ou supera o FedAvg e o Shapley nas quatro métricas (+0,1 a +0,7 pp com α=0,5, significativo; +2 a +4 pp com α=0,1, não significativo).
+1. **O Stackelberg detecta com precisão e recall de 100% os free-riders silenciosos (3 de 10 e 5 de 10)** e, com os mesmos dados dos demais mecanismos, iguala ou supera o FedAvg e o Shapley nas quatro métricas. Com α=0,5 o efeito é estatisticamente detectável, mas pequeno em MNIST (efeito de teto, acurácia perto de 98%); com α=0,1 a diferença é maior em pontos percentuais, mas inconclusiva (alta variância do FedAvg). Os p-valores devem ser lidos com a correção de Holm e o IC 95% da diferença, impressos por `scripts/summarize_results.py`.
 2. **O custo do jogo com preço é de dados e acurácia:** ele usa ~7 a 9% dos dados e paga ~90% menos, e perde de 5 a 11 pp de acurácia. A perda vem do volume de dados, não da detecção (seção 7).
 3. **O Shapley com leave-one-out é um detector fraco** (nível do acaso para silent e low-effort), custa ~1.500× o FedAvg e seu ganho com α=0,1 é consistente em direção mas não significativo, em parte do peso uniforme. Só se destaca contra ruído, que é ataque ativo. Isso é compatível com [18], que descreve o leave-one-out como "moderadamente eficaz".
 4. **Nenhum mecanismo ajuda contra low-effort.** Esse tipo é o único sem respaldo direto na literatura (o número de épocas é escolha do trabalho), por isso é análise de sensibilidade.
@@ -252,6 +252,7 @@ Nenhum mecanismo domina os outros. O Stackelberg ganha em recompensa justa e em 
 - **Stackelberg com dados completos não é o mecanismo da literatura:** o cliente deixa de jogar a resposta ótima e o pagamento é calculado sobre dados que ele não escolheu. Serve para igualar os dados e isolar a detecção; o Stackelberg original aparece na seção 6.
 - **O limiar Cm0 é fixo e não foi calibrado por cenário.** Ajustá-lo ao ataque seria otimizar em cima do conjunto de teste, e na prática o servidor não conhece o ataque. Com ele, o Stackelberg só detecta silenciosos. Uma varredura de Cm0 fica como análise de sensibilidade complementar, não executada.
 - **"Shapley" é leave-one-out**, não o valor de Shapley exato nem o aproximado por Monte Carlo ou GTG-Shapley [40]. Não foi testado.
+- **A utilidade do Shapley (acurácia) satura, e isso explica a detecção no nível do acaso.** Diagnóstico a partir dos `client_scores` já salvos (`scripts/diagnose_shapley.py`, sem novas execuções). Com α=0,5 e free-riders silenciosos, nas rodadas 0 a 5 o φ dos free-riders é negativo (média −0,012; 92% deles com φ<0), como esperado. A partir da rodada 5, o |φ| cai para cerca de 0,0005 a 0,001 (3 a 6 amostras em 6.000) e 96% das rodadas têm empate em φ, de modo que o ranking vira ruído. O desempate do código é por `client_id` crescente, e os free-riders são os ids 0 a 2; com desempate aleatório o recall cai de 0,33 para 0,29 (acaso: 0,30), ou seja, o 0,33 é em parte artefato do desempate. Com α=0,1 não há saturação (|φ| de 0,005 a 0,01), mas o φ dos silenciosos é positivo depois da rodada 5 (só 3 a 9% com φ<0): tudo indica que, com label skew forte, o modelo sem mudança que o silencioso devolve age como âncora e removê-lo piora a média (inferência, não testada isoladamente). Com ruído, o φ médio dos free-riders é negativo em todas as janelas. A variante com perda (`--shapley-utility loss`) é a correção natural para a saturação; seus resultados estão em `results/*/shapley_loss/` quando executada (`bash scripts/run_all.sh shapley_loss`).
 - **O V do Shapley depende do cenário** (0,3; 0,5 no fr50), seguindo a regra de escolher V ligeiramente acima da fração de free-riders. Isso pressupõe conhecer essa fração, o que é uma vantagem frente ao Stackelberg.
 - **Informação e recompensa diferentes entre os mecanismos:** o Shapley usa um conjunto de validação no servidor; o Stackelberg usa só os gradientes; o FedAvg não paga. A parcela de recompensa do FedAvg é inferida do peso de agregação, e os pagamentos do Stackelberg estão em unidades sintéticas.
 - **Free-riders não estratégicos:** eles têm comportamento fixo e não reagem ao mecanismo.
