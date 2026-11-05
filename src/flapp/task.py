@@ -36,6 +36,33 @@ class SimpleCNN(nn.Module):
         return self.fc2(x)
 
 
+class SmallCNN(nn.Module):
+    # 18,406 parameters: the model size that the cost model of [29] assumes (Table II).
+    def __init__(self, num_classes=10):
+        super().__init__()
+        self.conv1 = nn.Conv2d(1, 8, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(8, 8, kernel_size=3, padding=1)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.fc1 = nn.Linear(8 * 7 * 7, 44)
+        self.fc2 = nn.Linear(44, num_classes)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = x.view(-1, 8 * 7 * 7)
+        x = F.relu(self.fc1(x))
+        return self.fc2(x)
+
+
+MODELS = {"cnn": SimpleCNN, "small": SmallCNN}
+
+
+def make_model(model_name="cnn"):
+    if model_name not in MODELS:
+        raise ValueError(f"Unknown model {model_name!r}. Choose one of {list(MODELS)}.")
+    return MODELS[model_name]()
+
+
 def get_params(model):
     params = []
     for value in model.state_dict().values():

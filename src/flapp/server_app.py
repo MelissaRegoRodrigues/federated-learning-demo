@@ -5,21 +5,21 @@ from flwr.server import ServerApp, ServerAppComponents, ServerConfig
 from flapp.strategies import STRATEGIES
 from flapp.strategies.base import fit_config
 from flapp.task import (
-    SimpleCNN,
     evaluate_metrics,
     get_params,
     load_partition_dataset,
     load_test_set,
     load_validation_set,
+    make_model,
     set_params,
 )
 
 
-def make_centralized_eval_fn(dataset="mnist"):
+def make_centralized_eval_fn(dataset="mnist", model_name="cnn"):
     test_loader = load_test_set(dataset=dataset)
 
     def evaluate_fn(server_round, ndarrays, config):
-        model = SimpleCNN()
+        model = make_model(model_name)
         set_params(model, ndarrays)
         metrics = evaluate_metrics(model, test_loader)
         return metrics["loss"], metrics
@@ -27,11 +27,11 @@ def make_centralized_eval_fn(dataset="mnist"):
     return evaluate_fn
 
 
-def make_shapley_utility_fn(seed, dataset="mnist"):
+def make_shapley_utility_fn(seed, dataset="mnist", model_name="cnn"):
     validation_loader = load_validation_set(seed=seed, dataset=dataset)
 
     def utility_fn(server_round, ndarrays, config):
-        model = SimpleCNN()
+        model = make_model(model_name)
         set_params(model, ndarrays)
         metrics = evaluate_metrics(model, validation_loader)
         return metrics["loss"], metrics
@@ -56,6 +56,7 @@ def make_strategy(strategy_name, common_arguments, settings):
             fraction_fit=1.0,
             fraction_evaluate=0.0,
             on_fit_config_fn=fit_config,
+            exclude_clients=settings["exclude_clients"],
             min_fit_clients=num_clients,
             min_available_clients=num_clients,
         )
@@ -63,7 +64,8 @@ def make_strategy(strategy_name, common_arguments, settings):
         return strategy_class(
             **common_arguments,
             voting_rate=settings["voting_rate"],
-            shapley_eval_fn=make_shapley_utility_fn(seed, settings["dataset"]),
+            utility=settings["shapley_utility"],
+            shapley_eval_fn=make_shapley_utility_fn(seed, settings["dataset"], settings["model"]),
         )
     return strategy_class(
         **common_arguments,
@@ -87,6 +89,9 @@ def build_server_app(
     compatibility_threshold=0.01,
     model_size=18406,
     dataset="mnist",
+    shapley_utility="accuracy",
+    model_name="cnn",
+    exclude_clients=(),
 ):
     settings = {
         "num_clients": num_clients,
@@ -97,13 +102,16 @@ def build_server_app(
         "compatibility_threshold": compatibility_threshold,
         "model_size": model_size,
         "dataset": dataset,
+        "shapley_utility": shapley_utility,
+        "model": model_name,
+        "exclude_clients": exclude_clients,
     }
 
     def server_fn(context):
         torch.manual_seed(seed)
-        initial_parameters = ndarrays_to_parameters(get_params(SimpleCNN()))
+        initial_parameters = ndarrays_to_parameters(get_params(make_model(model_name)))
         common_arguments = {
-            "evaluate_fn": make_centralized_eval_fn(dataset),
+            "evaluate_fn": make_centralized_eval_fn(dataset, model_name),
             "results_path": results_path,
             "num_clients": num_clients,
             "num_free_riders": num_free_riders,

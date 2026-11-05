@@ -4,7 +4,7 @@ from torch.utils.data import Subset
 
 from flapp import economics
 from flapp.free_rider import is_free_rider
-from flapp.task import SimpleCNN, get_params, load_partition_dataset, make_train_loader, set_params, train
+from flapp.task import get_params, load_partition_dataset, make_model, make_train_loader, set_params, train
 
 
 def make_round_seed(seed, partition_id, server_round):
@@ -24,8 +24,13 @@ class FlowerClient(NumPyClient):
         price_schedule=None,
         model_size=18406,
         free_rider_epochs=None,
+        model_name="cnn",
+        noise_std=None,
+        full_data=False,
     ):
         self.dataset = dataset
+        self.full_data = full_data
+        self.noise_std = noise_std
         self.free_rider_epochs = free_rider_epochs
         self.price_schedule = price_schedule
         self.model_size = model_size
@@ -35,7 +40,7 @@ class FlowerClient(NumPyClient):
         self.seed = seed
         self.batch_size = batch_size
         self.learning_rate = learning_rate
-        self.model = SimpleCNN()
+        self.model = make_model(model_name)
 
     def get_parameters(self, config):
         return get_params(self.model)
@@ -59,6 +64,17 @@ class FlowerClient(NumPyClient):
             config["price"], config["server_round"], params, config["model_size"], len(self.dataset)
         )
 
+    def noisy_parameters(self, parameters, config):
+        # Disguised free-rider: sends the global model plus Gaussian noise, without training.
+        # Its update is random, so it harms the average instead of just adding nothing.
+        round_seed = make_round_seed(self.seed, self.partition_id, config.get("server_round", 0))
+        rng = np.random.default_rng(round_seed)
+        noisy = []
+        for layer in parameters:
+            noise = rng.normal(0.0, self.noise_std, layer.shape)
+            noisy.append((layer + noise).astype(layer.dtype))
+        return noisy
+
     def training_data(self, datasize, round_seed):
         if datasize == len(self.dataset):
             return self.dataset
@@ -74,6 +90,11 @@ class FlowerClient(NumPyClient):
         datasize = self.chosen_datasize(config)
         if datasize == 0:
             return parameters, datasize, metrics
+        if self.full_data:
+            # Ablation: the game still decides who takes part, but whoever does uses all its data.
+            datasize = len(self.dataset)
+        if self.free_rider and self.noise_std is not None:
+            return self.noisy_parameters(parameters, config), datasize, metrics
         if self.free_rider and self.free_rider_epochs is None:
             return parameters, datasize, metrics
 
@@ -100,6 +121,9 @@ def build_client_app(
     model_size=18406,
     dataset_name="mnist",
     free_rider_epochs=None,
+    model_name="cnn",
+    noise_std=None,
+    full_data=False,
 ):
     def client_fn(context):
         partition_id = context.node_config["partition-id"]
@@ -116,6 +140,9 @@ def build_client_app(
             price_schedule=price_schedule,
             model_size=model_size,
             free_rider_epochs=free_rider_epochs,
+            model_name=model_name,
+            noise_std=noise_std,
+            full_data=full_data,
         )
         return client.to_client()
 

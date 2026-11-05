@@ -11,14 +11,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from flapp.fairness import normalized_shares, reference_shares, squared_distance
 from flapp.task import load_partition_dataset
 
-SETTINGS = {"results_dir": Path("results"), "dataset": "mnist"}
+SETTINGS = {"results_dir": Path("results"), "dataset": "mnist", "alpha": 0.5, "voting_rate": 0.3}
 
 FEDAVG = "fedavg"
-SHAPLEY = "shapley (V=0.3)"
+SHAPLEY = "shapley (V principal)"
 STACKELBERG = "stackelberg"
 SHAPLEY_V02 = "shapley (V=0.2)"
 SHAPLEY_V0 = "shapley (V=0, sem exclusão)"
 FEDAVG_CONTROL = "fedavg controle"
+FEDAVG_ORACLE = "fedavg detector perfeito"
 
 
 
@@ -31,6 +32,7 @@ def group_sources():
         SHAPLEY_V02: (results_dir / "shapley_v02", "shapley"),
         SHAPLEY_V0: (results_dir / "shapley_v0", "shapley"),
         FEDAVG_CONTROL: (results_dir / "control", "fedavg"),
+        FEDAVG_ORACLE: (results_dir / "oracle", "fedavg"),
     }
 
 
@@ -44,15 +46,24 @@ COMPARISONS = [
     (FEDAVG, FEDAVG_CONTROL),
     (SHAPLEY, SHAPLEY_V0),
     (SHAPLEY, SHAPLEY_V02),
+    (STACKELBERG, FEDAVG_ORACLE),
+    (SHAPLEY, FEDAVG_ORACLE),
 ]
 METRICS = ["accuracy", "precision", "recall", "f1"]
 SEEDS = [42, 43, 44, 45, 46]
 NUM_CLIENTS = 10
 NUM_FREE_RIDERS = 3
 NUM_ROUNDS = 50
-ALPHA = 0.5
 FREE_RIDER_IDS = set(range(NUM_FREE_RIDERS))
 HONEST_IDS = list(range(NUM_FREE_RIDERS, NUM_CLIENTS))
+
+
+def set_num_free_riders(count):
+    # The scenario with 50% of free-riders has 5 of them, so the ids cannot be fixed.
+    global NUM_FREE_RIDERS, FREE_RIDER_IDS, HONEST_IDS
+    NUM_FREE_RIDERS = count
+    FREE_RIDER_IDS = set(range(count))
+    HONEST_IDS = list(range(count, NUM_CLIENTS))
 
 
 def load_runs(folder, strategy):
@@ -109,7 +120,7 @@ def print_title(title):
 def partition_sizes(seed):
     sizes = {}
     for client_id in range(NUM_CLIENTS):
-        sizes[client_id] = len(load_partition_dataset(client_id, NUM_CLIENTS, ALPHA, seed, SETTINGS["dataset"]))
+        sizes[client_id] = len(load_partition_dataset(client_id, NUM_CLIENTS, SETTINGS["alpha"], seed, SETTINGS["dataset"]))
     return sizes
 
 
@@ -251,7 +262,7 @@ def gains_by_seed(mechanism_runs, baseline_runs, metric):
 
 
 GAIN_PAIRS = [
-    ("shapley (V=0.3) sobre shapley (V=0)", SHAPLEY, SHAPLEY_V0),
+    ("shapley (V principal) sobre shapley (V=0)", SHAPLEY, SHAPLEY_V0),
     ("stackelberg sobre fedavg controle", STACKELBERG, FEDAVG_CONTROL),
 ]
 
@@ -282,6 +293,28 @@ def print_gains(groups):
         print(f"  diferença entre os ganhos (shapley - stackelberg) {difference:+.4f}   t pareado p = {p_value:.4f}")
 
 
+def print_gap_recovery(groups):
+    print_title("Parcela da folga recuperada (acurácia final): (mecanismo - fedavg) / (detector perfeito - fedavg)")
+    if FEDAVG not in groups or FEDAVG_ORACLE not in groups:
+        print("faltam o fedavg ou o detector perfeito")
+        return
+    baseline = metric_by_seed(groups[FEDAVG], "accuracy")
+    oracle = metric_by_seed(groups[FEDAVG_ORACLE], "accuracy")
+    gaps = [oracle[seed] - baseline[seed] for seed in sorted(set(baseline) & set(oracle))]
+    print(f"folga recuperável (detector perfeito - fedavg): {mean_and_std(gaps)}")
+    print("com folga pequena a razão é instável; use junto com a diferença absoluta")
+    for label in [SHAPLEY, SHAPLEY_V0, STACKELBERG, FEDAVG_CONTROL]:
+        if label not in groups:
+            continue
+        values = metric_by_seed(groups[label], "accuracy")
+        shares = []
+        for seed in sorted(set(values) & set(baseline) & set(oracle)):
+            gap = oracle[seed] - baseline[seed]
+            if abs(gap) > 1e-9:
+                shares.append((values[seed] - baseline[seed]) / gap)
+        print(f"{label}: {mean_and_std(shares)}")
+
+
 def print_detection(groups):
     print_title("Detecção de free-riders")
     for label in MECHANISM_GROUPS:
@@ -293,6 +326,7 @@ def print_detection(groups):
         recall = true_positives / max(true_positives + false_negatives, 1)
         f1 = 2 * true_positives / max(2 * true_positives + false_positives + false_negatives, 1)
         print(f"{label}: precisão {precision:.3f}  recall {recall:.3f}  F1 {f1:.3f}  falsos positivos {false_positives}")
+        print(f"  referência do acaso (sorteio de {NUM_FREE_RIDERS} clientes): precisão {NUM_FREE_RIDERS / NUM_CLIENTS:.3f}")
         print(f"  free-riders sinalizados em {np.mean(flag_rate(runs, FREE_RIDER_IDS)):.2f} das rodadas")
         print(f"  honestos sinalizados em {np.mean(flag_rate(runs, HONEST_IDS)):.2f} das rodadas")
 
@@ -428,9 +462,13 @@ def main():
     parser = argparse.ArgumentParser(description="Print the numbers of the thesis tables.")
     parser.add_argument("--results-dir", type=Path, default=Path("results"))
     parser.add_argument("--dataset", choices=["mnist", "fashion-mnist"], default="mnist")
+    parser.add_argument("--num-free-riders", type=int, default=NUM_FREE_RIDERS)
+    parser.add_argument("--alpha", type=float, default=0.5, help="Dirichlet alpha of the scenario.")
     args = parser.parse_args()
+    set_num_free_riders(args.num_free_riders)
     SETTINGS["results_dir"] = args.results_dir
     SETTINGS["dataset"] = args.dataset
+    SETTINGS["alpha"] = args.alpha
 
     groups = load_groups()
 
@@ -438,6 +476,7 @@ def main():
     print_model_metrics(groups)
     print_statistical_tests(groups)
     print_gains(groups)
+    print_gap_recovery(groups)
     print_detection(groups)
     print_heterogeneity(groups)
     print_reward_distance(groups)

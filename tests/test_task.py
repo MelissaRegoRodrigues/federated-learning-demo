@@ -99,3 +99,19 @@ def test_fashion_mnist_partitions_do_not_overlap_with_the_validation_set():
         assert not indices & seen
         seen |= indices
     assert len(seen) + len(validation) == 60000
+
+
+def test_small_model_has_the_size_of_the_cost_model():
+    from flapp.task import make_model
+
+    model = make_model("small")
+    assert sum(parameter.numel() for parameter in model.parameters()) == 18406
+
+
+def test_make_model_rejects_unknown_name():
+    import pytest
+
+    from flapp.task import make_model
+
+    with pytest.raises(ValueError):
+        make_model("huge")
