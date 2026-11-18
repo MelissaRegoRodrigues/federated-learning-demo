@@ -78,22 +78,38 @@ def mean_sd(values, scale=1.0, digits=1):
     return f"{values.mean():.{digits}f} ± {values.std(ddof=1):.{digits}f}"
 
 
-def paired(first, second, scale=1.0, digits=2):
+def paired_raw(first, second, scale=1.0):
+    # Teste t pareado por semente. Devolve os números crus; o texto sai depois de aplicar Holm.
     seeds = sorted(set(first) & set(second))
     a = np.array([first[s] for s in seeds]) * scale
     b = np.array([second[s] for s in seeds]) * scale
     difference = a - b
     if np.allclose(difference, 0):
+        return {"zero": True, "mean": 0.0, "p": 1.0, "low": 0.0, "high": 0.0, "wins": 0, "n": len(seeds)}
+    low, high = sr.confidence_interval(difference)
+    return {
+        "zero": False,
+        "mean": difference.mean(),
+        "p": stats.ttest_rel(a, b).pvalue,
+        "low": low,
+        "high": high,
+        "wins": int((difference > 0).sum()),
+        "n": len(seeds),
+    }
+
+
+def format_paired(result, adjusted_p, digits=2):
+    if result["zero"]:
         return "0,0 (p=1)"
-    p_value = stats.ttest_rel(a, b).pvalue
-    wins = int((difference > 0).sum())
-    return f"{difference.mean():+.{digits}f} (p={p_value:.3f}; {wins}/{len(seeds)})"
+    return (
+        f"{result['mean']:+.{digits}f} [{result['low']:+.{digits}f}, {result['high']:+.{digits}f}] "
+        f"(p={result['p']:.3f}; Holm {adjusted_p:.3f}; {result['wins']}/{result['n']})"
+    )
 
 
 def load(alpha, attack):
-    folder = Path("results") / f"a{alpha.replace('.', '')}_{attack}"
-    sr.SETTINGS["results_dir"] = folder
-    sr.set_num_free_riders(ATTACKS[attack])
+    use_scenario(alpha, attack)
+    folder = sr.SETTINGS["results_dir"]
     runs = {name: sr.load_runs(folder, name) for name in ["fedavg", "shapley"]}
     runs["stackelberg"] = sr.load_runs(folder / "full_data", "stackelberg")
     runs["stackelberg_price"] = sr.load_runs(folder, "stackelberg")
@@ -123,66 +139,133 @@ def print_table(title, header, rows):
         print("| " + " | ".join(row) + " |")
 
 
+def build_metrics():
+    # nome da metrica -> (funcao por execucao, escala para exibir, casas decimais)
+    return {
+        "acurácia final (%)": (final_metric("accuracy"), 100, 1),
+        "precisão do modelo (%)": (final_metric("precision"), 100, 1),
+        "recall do modelo (%)": (final_metric("recall"), 100, 1),
+        "F1 do modelo (%)": (final_metric("f1"), 100, 1),
+        "oscilação nas últimas 10 rodadas (pp)": (lambda r, s: stability(r), 100, 2),
+        "rodada em que atinge 95%": (lambda r, s: first_round_at_95(r), 1, 1),
+        "parcela da recompensa dos free-riders (%)": (free_rider_reward_share, 100, 1),
+        "tempo do servidor (s/rodada)": (lambda r, s: server_seconds(r), 1, 3),
+    }
+
+
+def values_by_strategy(runs, function):
+    values = {}
+    for strategy in STRATEGIES:
+        values[strategy] = {run["seed"]: function(run, strategy) for run in runs[strategy]}
+    return values
+
+
+def use_scenario(alpha, attack):
+    # O summarize_results guarda o cenario atual em variaveis globais (pasta, alpha e numero de free-riders).
+    # Como aqui todos os cenarios sao carregados antes de calcular, o estado precisa ser restaurado.
+    # O alpha importa: partition_sizes() usa ele para refazer a particao Dirichlet. Sem isso, o FedAvg
+    # com alpha=0,1 usava os tamanhos da particao de alpha=0,5 (bug que deixava a Tabela 12 igual nos dois alphas).
+    sr.SETTINGS["results_dir"] = Path("results") / f"a{alpha.replace('.', '')}_{attack}"
+    sr.SETTINGS["alpha"] = float(alpha)
+    sr.set_num_free_riders(ATTACKS[attack])
+
+
+def compute_all_tests(scenarios):
+    # Calcula os testes de todos os cenarios antes de imprimir: o Holm precisa ver a familia inteira.
+    tests_by_scenario = []
+    for alpha, attack, runs in scenarios:
+        use_scenario(alpha, attack)
+        tests = []
+        for name, (function, scale, _) in build_metrics().items():
+            values = values_by_strategy(runs, function)
+            results = [paired_raw(values[a], values[b], scale) for a, b in PAIRS]
+            tests.append((name, results))
+        tests_by_scenario.append(tests)
+    return tests_by_scenario
+
+
+def adjusted_p_values(tests_by_scenario):
+    # Holm sobre todos os testes (cenarios x metricas x pares). Devolve um iterador na mesma ordem.
+    all_p = []
+    for tests in tests_by_scenario:
+        for _, results in tests:
+            for result in results:
+                all_p.append(result["p"])
+    return all_p, iter(sr.holm_adjust(all_p))
+
+
+def print_scenario(alpha, attack, runs, tests, adjusted_iter):
+    use_scenario(alpha, attack)
+    print(f"\n### α={alpha} — {attack}")
+    metrics = build_metrics()
+
+    rows = []
+    for name, (function, scale, digits) in metrics.items():
+        values = values_by_strategy(runs, function)
+        rows.append([name] + [mean_sd(values[s].values(), scale, digits) for s in STRATEGIES])
+
+    test_rows = []
+    for name, results in tests:
+        digits = metrics[name][2]
+        cells = [format_paired(result, next(adjusted_iter), digits) for result in results]
+        test_rows.append([name] + cells)
+
+    print_table("Médias ± desvio entre sementes", ["métrica", "FedAvg", "Shapley", "Stackelberg"], rows)
+    print_table(
+        "Diferença pareada [IC 95%] (p do t pareado; p ajustado por Holm; sementes em que o primeiro é maior)",
+        ["métrica", "Shapley − FedAvg", "Stackelberg − FedAvg", "Stackelberg − Shapley"],
+        test_rows,
+    )
+
+    detection_rows = []
+    for strategy in ["shapley", "stackelberg"]:
+        values = [detection(run) for run in runs[strategy]]
+        precisions = [v[0] for v in values if v[0] == v[0]]
+        recall = np.mean([v[1] for v in values])
+        if len(precisions) == 0:
+            precision_text = "sem sinalizações"
+        else:
+            precision_text = f"{np.mean(precisions):.2f}"
+        detection_rows.append([strategy, precision_text, f"{recall:.2f}"])
+    print_table(
+        "Detecção de free-riders (média das sementes; não é a precisão/recall do modelo)",
+        ["mecanismo", "precisão da detecção", "recall da detecção"],
+        detection_rows,
+    )
+
+    price_rows = []
+    variants = [
+        ("Stackelberg com dados completos", "stackelberg"),
+        ("Stackelberg com dados escolhidos pelo preço", "stackelberg_price"),
+    ]
+    for label, key in variants:
+        group = runs[key]
+        price_rows.append([
+            label,
+            mean_sd([final_accuracy(r) for r in group], 100, 1),
+            mean_sd([r["rounds"][-1]["f1"] for r in group], 100, 1),
+            mean_sd([data_fraction_used(r) for r in group], 100, 1),
+            mean_sd([total_payment(r) for r in group], 1e-3, 0),
+        ])
+    print_table(
+        "Stackelberg: dados completos × dados escolhidos pelo preço",
+        ["variante", "acurácia final (%)", "F1 final (%)", "dados usados (% dos dados de todos os clientes)", "pagamento total (milhares)"],
+        price_rows,
+    )
+
+
 def main():
+    scenarios = []
     for alpha in ALPHAS:
         for attack in ATTACKS:
-            runs = load(alpha, attack)
-            print(f"\n### α={alpha} — {attack}")
-            metrics = {
-                "acurácia final (%)": (final_metric("accuracy"), 100, 1),
-                "precisão do modelo (%)": (final_metric("precision"), 100, 1),
-                "recall do modelo (%)": (final_metric("recall"), 100, 1),
-                "F1 do modelo (%)": (final_metric("f1"), 100, 1),
-                "oscilação nas últimas 10 rodadas (pp)": (lambda r, s: stability(r), 100, 2),
-                "rodada em que atinge 95%": (lambda r, s: first_round_at_95(r), 1, 1),
-                "parcela da recompensa dos free-riders (%)": (free_rider_reward_share, 100, 1),
-                "tempo do servidor (s/rodada)": (lambda r, s: server_seconds(r), 1, 3),
-            }
-            rows = []
-            tests = []
-            for name, (function, scale, digits) in metrics.items():
-                values = {}
-                for strategy in STRATEGIES:
-                    values[strategy] = {run["seed"]: function(run, strategy) for run in runs[strategy]}
-                rows.append([name] + [mean_sd(values[s].values(), scale, digits) for s in STRATEGIES])
-                tests.append([name] + [paired(values[a], values[b], scale, digits) for a, b in PAIRS])
-            print_table("Médias ± desvio entre sementes", ["métrica", "FedAvg", "Shapley", "Stackelberg"], rows)
-            print_table(
-                "Diferença pareada (p do t pareado; sementes em que o primeiro é maior)",
-                ["métrica", "Shapley − FedAvg", "Stackelberg − FedAvg", "Stackelberg − Shapley"],
-                tests,
-            )
-            detection_rows = []
-            for strategy in ["shapley", "stackelberg"]:
-                values = [detection(run) for run in runs[strategy]]
-                precisions = [v[0] for v in values if v[0] == v[0]]
-                recall = np.mean([v[1] for v in values])
-                if len(precisions) == 0:
-                    precision_text = "sem sinalizações"
-                else:
-                    precision_text = f"{np.mean(precisions):.2f}"
-                detection_rows.append([strategy, precision_text, f"{recall:.2f}"])
-            print_table(
-                "Detecção de free-riders (média das sementes; não é a precisão/recall do modelo)",
-                ["mecanismo", "precisão da detecção", "recall da detecção"],
-                detection_rows,
-            )
+            scenarios.append((alpha, attack, load(alpha, attack)))
 
-            price_rows = []
-            for label, key in [("Stackelberg com dados completos", "stackelberg"), ("Stackelberg com dados escolhidos pelo preço", "stackelberg_price")]:
-                group = runs[key]
-                price_rows.append([
-                    label,
-                    mean_sd([final_accuracy(r) for r in group], 100, 1),
-                    mean_sd([r["rounds"][-1]["f1"] for r in group], 100, 1),
-                    mean_sd([data_fraction_used(r) for r in group], 100, 1),
-                    mean_sd([total_payment(r) for r in group], 1e-3, 0),
-                ])
-            print_table(
-                "Stackelberg: dados completos × dados escolhidos pelo preço",
-                ["variante", "acurácia final (%)", "F1 final (%)", "dados usados (% dos dados de todos os clientes)", "pagamento total (milhares)"],
-                price_rows,
-            )
+    tests_by_scenario = compute_all_tests(scenarios)
+    all_p, adjusted_iter = adjusted_p_values(tests_by_scenario)
+    print(f"<!-- Holm-Bonferroni sobre {len(all_p)} testes (cenários x métricas x pares). IC 95% da diferença entre colchetes. -->")
+
+    for (alpha, attack, runs), tests in zip(scenarios, tests_by_scenario):
+        print_scenario(alpha, attack, runs, tests, adjusted_iter)
 
 
 if __name__ == "__main__":
