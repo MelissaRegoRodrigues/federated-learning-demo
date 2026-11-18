@@ -144,7 +144,23 @@ Precisão e recall **da detecção**, não do modelo. No Shapley os dois são ig
 
 - **Stackelberg:** perfeito contra free-riders silenciosos e no fr50 (zero falsos positivos). Não detecta low-effort nem noisy: o limiar fixo (Cm0 = 0,01) está entre o Cm dos silenciosos (0) e o dos honestos (≥ 0,067), e esses ataques não ficam abaixo dele.
 - **Na prática, a detecção do Stackelberg é um filtro de atualização nula.** Conferido nos `client_scores` salvos da variante com dados completos: nos cenários silent e fr50 o Cm dos free-riders é **exatamente 0** (o gradiente é nulo, então o cosseno e a entropia dão 0) e todos são barrados na rodada 1; o menor Cm de um honesto em todas as execuções é 0,11. No noisy o Cm dos free-riders (0,09 a 0,21) se sobrepõe ao dos honestos (0,11 a 0,19), então nenhum limiar fixo os separa. A única sinalização fora disso foi um low-effort com α=0,1 (Cm = 0,009, uma semente). Consequência: um filtro simples "exclua quem envia ‖Δ‖ = 0" sinalizaria os mesmos clientes na mesma rodada e daria a mesma agregação, logo o mesmo resultado (as execuções são determinísticas por semente). Os 100% de detecção vêm da construção do ataque silencioso, não da Teoria dos Jogos; o jogo não acrescenta poder de detecção sobre esse filtro.
-- **Shapley:** no silent e no low-effort fica no nível do acaso (abaixo dele no silent com α=0,1). Só se afasta do acaso no noisy com α=0,5 (0,65) e no fr50 (0,61 e 0,63, contra 0,50 do acaso). Sinaliza honestos em 15 a 39% das rodadas e tende a sinalizar mais os clientes com pouco dado. Correlação de Spearman entre o tamanho da partição do honesto e a taxa com que ele é sinalizado (`results/resumo_geral.md`; n = 35 honestos × sementes, 25 no fr50):
+- **Por que o recall de 0,07 do Stackelberg em α=0,1 low-effort não muda nada.** Esse recall é **uma única detecção**: o cliente 2 da semente 44, barrado na rodada 1 (Cm = 0,009, logo abaixo do limiar 0,01). Esse cliente tem só **33 amostras** (0,06% dos 54.000), e uma época sobre 33 amostras produz uma atualização minúscula; ele foi barrado pelo tamanho da atualização, não por ser low-effort. Barrá-lo muda a parcela da recompensa dos free-riders de 34,04% para 34,00% nessa semente e os dados usados de 100% para 99,94%. Na média das 5 sementes, os dois números arredondam para os mesmos do FedAvg (parcela 31,1%; dados 100,0%), e a diferença pareada da parcela é −0,0 pp (p = 0,37). Com o cliente como unidade, o teste de Fisher dessa detecção dá p = 0,30 (abaixo).
+
+**Teste exato de Fisher da detecção** (`scripts/fisher_detection.py`, tabela completa em `results/fisher_deteccao.md`). Pergunta: o mecanismo sinaliza free-riders com mais frequência do que honestos? Tabela 2×2 (free-rider/honesto × sinalizado/não), teste unilateral (razão de chances > 1; ao acaso ela vale 1), Holm sobre os 16 testes. A unidade depende de como o mecanismo decide. No **Shapley**, que decide de novo a cada rodada, a unidade é cliente × rodada (as mesmas contagens da precisão/recall); como as rodadas de uma execução não são independentes, o p é otimista. No **Stackelberg**, que barra para sempre, a unidade é cliente × semente, porque contar rodadas multiplicaria uma única decisão por 49.
+
+| Cenário | Shapley: razão de chances (p Holm) | Stackelberg: barrados FR / honestos (p Holm) |
+|---|---|---|
+| α=0,5 silent | 1,22 (0,14) | 15/15 e 0/35 (4·10⁻¹²) |
+| α=0,5 low-effort | 1,07 (1) | 0/15 e 0/35 (1) |
+| α=0,5 noisy | 10,15 (2·10⁻¹²⁸) | 0/15 e 0/35 (1) |
+| α=0,5 fr50 | 2,42 (9·10⁻²⁷) | 25/25 e 0/25 (1·10⁻¹³) |
+| α=0,1 silent | 0,74 (1) | 15/15 e 0/35 (4·10⁻¹²) |
+| α=0,1 low-effort | 1,77 (5·10⁻⁹) | 1/15 e 0/35 (1) |
+| α=0,1 noisy | 3,11 (2·10⁻³³) | 0/15 e 0/35 (1) |
+| α=0,1 fr50 | 2,85 (8·10⁻³⁷) | 25/25 e 0/25 (1·10⁻¹³) |
+
+Leitura: o Stackelberg separa free-riders de honestos só onde a atualização é nula (silent, fr50), e aí a separação é perfeita. O Shapley não se distingue do acaso no silent (nos dois α) nem no low-effort com α=0,5. Nos demais cenários ele fica acima do acaso, com efeito forte no noisy com α=0,5 (razão de chances 10) e moderado nos outros (1,8 a 3,1). Esses p do Shapley devem ser lidos com a ressalva da dependência entre rodadas.
+- **Shapley:** no silent (nos dois α) e no low-effort com α=0,5 fica no nível do acaso (abaixo dele no silent com α=0,1); no low-effort com α=0,1 fica pouco acima (0,39; Fisher significativo, razão de chances 1,8). Só se afasta do acaso no noisy com α=0,5 (0,65) e no fr50 (0,61 e 0,63, contra 0,50 do acaso). Sinaliza honestos em 15 a 39% das rodadas e tende a sinalizar mais os clientes com pouco dado. Correlação de Spearman entre o tamanho da partição do honesto e a taxa com que ele é sinalizado (`results/resumo_geral.md`; n = 35 honestos × sementes, 25 no fr50):
 
 | | silent | low-effort | noisy | fr50 |
 |---|---|---|---|---|
@@ -177,10 +193,12 @@ O Stackelberg zera a recompensa dos free-riders onde os detecta (silent e fr50).
 
 | | FedAvg | Shapley | Stackelberg |
 |---|---|---|---|
-| típico | 0,004 | 6 a 8,4 | 0,16 a 0,21 (+ ~2,4 s de calibração única) |
-| relativo ao FedAvg | 1× | 1.340 a 1.940× | 40 a 47× |
+| típico | 0,0041 a 0,0047 | 6,0 a 8,4 | 0,16 a 0,21 (+ ~2,4 s de calibração única) |
+| relativo ao FedAvg¹ | 1× | 1.340 a 1.940× | 40 a 47× |
 
-O Shapley custa de **1.340 a 1.940 vezes** o FedAvg (o leave-one-out exige uma avaliação do modelo por cliente a cada rodada; o máximo é no fr50) e de 30 a 48 vezes o Stackelberg. As razões são a média do tempo por rodada do mecanismo dividida pela média do FedAvg, por cenário, com o mesmo `server_seconds` das tabelas. A diferença é significativa em todos os cenários.
+¹ A razão é calculada por cenário como (média do tempo por rodada do mecanismo nas 5 sementes) ÷ (média do tempo por rodada do FedAvg nas mesmas sementes), com os tempos sem arredondamento (`server_seconds` dos JSONs, o mesmo das tabelas). Ela não sai dividindo os valores arredondados da tabela: com o FedAvg arredondado para 0,004 s, 6,0 a 8,4 s dariam 1.500 a 2.100×, mas a média real do FedAvg é 0,0041 a 0,0047 s.
+
+O Shapley custa de **1.340 a 1.940 vezes** o FedAvg e de 30 a 48 vezes o Stackelberg (o máximo é no fr50). O custo bate com o código: o leave-one-out faz N + 1 = 11 avaliações por rodada (a coalizão completa e uma sem cada cliente), sobre as 6.000 amostras de validação. Uma avaliação da rede pequena leva de 0,54 a 0,77 s (tempo medido ÷ 11; 0,72 s medido isoladamente no mesmo ambiente), o que dá 6,0 a 8,4 s por rodada. A estimativa antiga de 1,08 s por avaliação (11 × 1,08 ≈ 11,9 s) era da rede grande (421.642 parâmetros; 1,33 s medido isoladamente) e foi corrigida em `docs/formulas.md`. A diferença é significativa em todos os cenários.
 
 ## 6. Stackelberg: dados completos × dados escolhidos pelo preço
 
@@ -252,7 +270,7 @@ Nenhum mecanismo domina os outros. O Stackelberg exclui (e deixa de pagar) os fr
 
 1. **O Stackelberg detecta com precisão e recall de 100% os free-riders silenciosos (3 de 10 e 5 de 10)** e, com os mesmos dados dos demais mecanismos, iguala ou supera o FedAvg e o Shapley nas quatro métricas. Com α=0,5 a diferença é pequena (+0,1 pp no silent, IC 95% [+0,1; +0,2]; +0,7 pp no fr50, IC [+0,3; +1,0]) e consistente (5/5 sementes), mas **não sobrevive à correção de Holm**: sobre os 192 testes, os p brutos de 0,003 e 0,006 viram 0,511 e 0,982; mesmo restringindo a família às 24 comparações de acurácia, o menor p ajustado é 0,072. Com α=0,1 a diferença é maior em pontos percentuais, mas inconclusiva (IC inclui zero; alta variância do FedAvg). O que continua significativo depois do Holm é o custo (tempo do servidor) e, só com α=0,5, a parcela da recompensa que vai para free-riders; nenhuma diferença de acurácia ou F1 entre mecanismos é. A leitura honesta é, portanto, que **os mecanismos não se distinguem em acurácia em MNIST**, e que a vantagem do Stackelberg está na detecção e no custo, não na acurácia. A detecção, por sua vez, equivale a um filtro de atualização nula (seção 4): o resultado não mostra um ganho atribuível ao jogo em si. Tabelas com IC 95% e p ajustado em `results/tabelas_comparacao.md` (gerado por `scripts/analyze_comparison.py`).
 2. **O custo do jogo com preço é de dados e acurácia:** ele usa ~7 a 9% dos dados e paga ~90% menos, e perde de 5 a 11 pp de acurácia. A perda vem do volume de dados, não da detecção (seção 7).
-3. **O Shapley com leave-one-out é um detector fraco** (nível do acaso para silent e low-effort), custa de 1.340 a 1.940× o FedAvg e seu ganho com α=0,1 é consistente em direção mas não significativo, em parte do peso uniforme. Só se destaca contra ruído, que é ataque ativo. Isso é compatível com [18], que descreve o leave-one-out como "moderadamente eficaz".
+3. **O Shapley com leave-one-out é um detector fraco** (nível do acaso para silent e para low-effort com α=0,5, pelo teste de Fisher), custa de 1.340 a 1.940× o FedAvg e seu ganho com α=0,1 é consistente em direção mas não significativo, em parte do peso uniforme. Só se destaca contra ruído, que é ataque ativo. Isso é compatível com [18], que descreve o leave-one-out como "moderadamente eficaz".
 4. **Nenhum mecanismo ajuda contra low-effort.** Esse tipo é o único sem respaldo direto na literatura (o número de épocas é escolha do trabalho), por isso é análise de sensibilidade.
 5. **H1 (o FedAvg degrada com free-riders)** deve ser testada nos tipos passivos (silent e low-effort), com o ruidoso reportado à parte. Com α=0,5 a degradação por passivos é pequena (0,1 a 0,4 pp); com α=0,1 chega a ~5 pp no silent, parte dela só pela falta de dados.
 6. **Com α=0,5 e MNIST os efeitos são pequenos** (a acurácia satura em ~98%); os mecanismos só fazem diferença maior com heterogeneidade forte, proporção alta de free-riders ou ataque ativo.
@@ -280,6 +298,7 @@ bash scripts/run_all.sh                # bateria completa dos 8 cenários (uma e
 bash scripts/run_all.sh shapley_loss   # ablação opcional: Shapley com perda (silent e noisy)
 bash scripts/summarize_all.sh > results/resumo_geral.md
 python scripts/analyze_comparison.py > results/tabelas_comparacao.md
+python scripts/fisher_detection.py > results/fisher_deteccao.md
 pytest tests/
 ```
 

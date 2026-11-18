@@ -347,10 +347,13 @@ exact value or about GTG-Shapley. [18] reports that leave-one-out is *"the least
 quantity-skewed FL, only slightly outperforming Random, but has moderate effectiveness in label-skewed
 FL"*; the partition used here has both kinds of skew. [21] notes that deletion-based approaches *"overlook
 coordination with other clients and are prone to inaccuracies"*, and [47] that they compress the
-contribution of small datasets. The reason for the choice is cost: evaluating one coalition on the 6,000
-validation samples takes about 1.08 s, so leave-one-out ($N + 1 = 11$ evaluations) takes about 10 minutes
-of evaluations per run, while the exact value ($2^{10} = 1024$ coalitions per round) would take about
-15 hours per run. Estimators such as GTG-Shapley [40] and Monte Carlo sampling of permutations were not run and are left as
+contribution of small datasets. The reason for the choice is cost: with the small network used in every result
+(18,406 parameters), evaluating one coalition on the 6,000 validation samples takes 0.54 to 0.77 s
+(measured server time per round divided by 11), so leave-one-out ($N + 1 = 11$ evaluations) takes 6.0 to
+8.4 s per round, about 5 to 7 minutes per run of 50 rounds, while the exact value ($2^{10} = 1024$
+coalitions per round) would take about 8 to 11 hours per run. (An earlier version of this note used 1.08 s
+per evaluation, measured with the large network of 421,642 parameters; that gave 11.9 s per round, which
+does not match the measured times.) Estimators such as GTG-Shapley [40] and Monte Carlo sampling of permutations were not run and are left as
 future work. The choice
 pushes the comparison in two opposite directions: the server cost of Shapley is the lowest one among its
 estimators, so the cost gap to Stackelberg is a lower bound, while the detection quality of Shapley may be
