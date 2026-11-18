@@ -283,4 +283,4 @@ python scripts/analyze_comparison.py > results/tabelas_comparacao.md
 pytest tests/
 ```
 
-Os JSONs brutos (`results/a*_*/**/*.json`, ~23 MB) não estão versionados no repositório; as tabelas só podem ser regeneradas a partir deles ou rodando a bateria de novo.
+Os JSONs brutos (`results/a*_*/**/*.json`, 320 arquivos) não estão versionados no repositório, mas estão anexados à release [`resultados-tcc`](https://github.com/MelissaRegoRodrigues/federated-learning-demo/releases/tag/resultados-tcc) como `resultados_brutos.zip`. Extraia o zip na raiz do repositório (ele já contém a pasta `results/`) e rode os dois comandos de resumo acima para regenerar todas as tabelas sem rodar os experimentos de novo.

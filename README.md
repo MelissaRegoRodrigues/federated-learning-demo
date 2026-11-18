@@ -79,7 +79,10 @@ In silent it also runs `fr0` (no free-riders) and `shapley_v02` (voting rate 0.2
 - `control/`: FedAvg where every client trains on the amount of data it would choose in the
   Stackelberg game, the baseline of the price-chosen Stackelberg.
 
-The raw JSON results (~23 MB) are not versioned in this repository.
+The raw JSON results (320 files) are not versioned in this repository. They are attached to the
+[`resultados-tcc` release](https://github.com/MelissaRegoRodrigues/federated-learning-demo/releases/tag/resultados-tcc)
+as `resultados_brutos.zip`: extract it at the repository root (it already contains `results/`) and run
+the commands of the next section to regenerate every table without running the experiments again.
 
 Run `python scripts/run_experiment.py --help` to see every option.
 
