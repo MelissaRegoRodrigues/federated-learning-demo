@@ -218,6 +218,8 @@ results/*.png
 results_backup_antes_da_correcao/
 scripts/queues/
 scripts/*.sh
+!scripts/run_all.sh
+!scripts/summarize_all.sh
 *.log
 results_rede_grande/
 results/a01_low_effort/

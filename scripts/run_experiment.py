@@ -31,8 +31,9 @@ def parse_args():
     parser.add_argument(
         "--model",
         choices=["cnn", "small"],
-        default="cnn",
-        help="cnn: 421,642 parameters. small: 18,406 parameters, the model size of the cost model of [29].",
+        default="small",
+        help="small (default, used in every result of the thesis): 18,406 parameters, the model size of the "
+        "cost model of [29]. cnn: 421,642 parameters, used only in the archived first runs.",
     )
     parser.add_argument(
         "--exclude-clients",

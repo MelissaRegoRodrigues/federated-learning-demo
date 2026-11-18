@@ -9,16 +9,17 @@ MNIST split non-IID across 10 simulated clients, 3 of which are free-riders:
 - **Stackelberg**: EntroCFL game where the server sets a payment per data, each client picks how
   much data to train on, and clients incompatible with the others are excluded without payment.
 
-Free-riders return the global model without training.
+Free-riders are clients 0-2 (0-4 in the 50% scenario). Three behaviours are implemented: **silent**
+(returns the global model without training), **low-effort** (trains 1 local epoch instead of 2) and
+**noisy** (returns the global model plus Gaussian noise).
 
 Built on [Flower](https://flower.ai/) and PyTorch.
-
-
 
 ## Setup
 
 Run inside **WSL2 (Ubuntu)**: Flower's Ray simulation backend does not work on native
-Windows.
+Windows. The results were produced with Python 3.14.4 and the exact versions pinned in
+`requirements.txt` (`flwr==1.35.0`).
 
 ```bash
 python3 -m venv ~/.venvs/fl-demo
@@ -26,66 +27,77 @@ source ~/.venvs/fl-demo/bin/activate
 pip install -r requirements.txt
 ```
 
-If `python3 -m venv` fails because `ensurepip` is missing
+If `python3 -m venv` fails because `ensurepip` is missing, see `docs/background.md`.
+
 ## Run
 
-One experiment (defaults: 10 clients, 3 free-riders, 50 rounds, Dirichlet α = 0.5):
+One experiment (defaults: 10 clients, 3 silent free-riders, 50 rounds, Dirichlet α = 0.5, the small
+CNN with 18,406 parameters used in every result of the thesis):
 ```bash
 python scripts/run_experiment.py --strategy stackelberg --seed 42
 ```
 This writes `results/stackelberg_seed42.json`. Run one experiment at a time: two at once do
 not fit in the 15 GB WSL memory.
 
-All experiments of the thesis. The function runs the whole comparison of one scenario; the
-Stackelberg of a seed runs before its control, because the control reads the price of each round from it.
-```bash
-run_comparison() {
-  base=$1; seeds=$2; shift 2
-  for seed in $seeds; do
-    python scripts/run_experiment.py --resume --strategy stackelberg --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --resume --strategy fedavg --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --resume --strategy shapley --seed $seed --results-dir $base "$@"
-    python scripts/run_experiment.py --resume --strategy shapley --seed $seed --shapley-voting-rate 0 --results-dir $base/shapley_v0 "$@"
-    python scripts/run_experiment.py --resume --strategy fedavg --seed $seed --results-dir $base/control --price-from $base/stackelberg_seed$seed.json "$@"
-  done
-}
+### Reproducing the thesis (8 scenarios)
 
-run_comparison results "42 43 44 45 46"
+The thesis uses α ∈ {0.5, 0.1} × {silent, low_effort, noisy, fr50} with seeds 42-46. The whole battery
+is in one script (one experiment at a time; `--resume` skips experiments that are already complete, so
+an interrupted run can simply be started again):
+
+```bash
+bash scripts/run_all.sh                 # every scenario, every mechanism and control
+bash scripts/run_all.sh full_data       # only the Stackelberg of the main comparison
+bash scripts/run_all.sh shapley_loss    # optional ablation: Shapley with loss utility
 ```
 
-One scenario: MNIST with silent free-riders (5 seeds, about 8 hours). Fashion-MNIST is implemented
-(`--dataset fashion-mnist`) but no Fashion-MNIST results are kept in this repository; it is left as future
-work. Run one experiment at a time. If the execution is interrupted, run
-the same commands again: `--resume` skips the experiments that are already complete (an interrupted
-experiment starts over).
+For one scenario and one seed, these are the runs the script makes (example: α = 0.1, noisy):
+```bash
+dir=results/a01_noisy; args="--alpha 0.1 --seed 42 --num-free-riders 3 --free-rider-type noisy"
+python scripts/run_experiment.py --resume --model small --results-dir $dir --strategy stackelberg $args
+python scripts/run_experiment.py --resume --model small --results-dir $dir/full_data --strategy stackelberg --full-data $args
+python scripts/run_experiment.py --resume --model small --results-dir $dir --strategy fedavg $args
+python scripts/run_experiment.py --resume --model small --results-dir $dir --strategy shapley --shapley-voting-rate 0.3 $args
+python scripts/run_experiment.py --resume --model small --results-dir $dir/shapley_v0 --strategy shapley --shapley-voting-rate 0 $args
+python scripts/run_experiment.py --resume --model small --results-dir $dir/control --strategy fedavg --price-from $dir/stackelberg_seed42.json $args
+```
 
-Optional extras, not needed for the main comparison: Shapley with voting rate 0.2
-(`--shapley-voting-rate 0.2 --results-dir results/shapley_v02`) and a scenario without free-riders
-(`--num-free-riders 0 --results-dir results/fr0`). Other combinations of `--dataset` and
-`--free-rider-type` also work.
+| Scenario | Folder | Extra arguments |
+|---|---|---|
+| silent | `results/a05_silent`, `results/a01_silent` | `--num-free-riders 3` |
+| low-effort | `results/a05_low_effort`, `results/a01_low_effort` | `--num-free-riders 3 --free-rider-type low-effort` |
+| noisy | `results/a05_noisy`, `results/a01_noisy` | `--num-free-riders 3 --free-rider-type noisy` |
+| fr50 | `results/a05_fr50`, `results/a01_fr50` | `--num-free-riders 5`, and Shapley with `--shapley-voting-rate 0.5` |
 
-- `results/`: the three mechanisms (Shapley with voting rate 0.3).
-- `results/shapley_v0/`: Shapley without exclusion (uniform weights), the baseline of the Shapley
-  mechanism.
-- `results/control/`: FedAvg where every client trains on the amount of data it would choose in the
-  Stackelberg game (the game without the compatibility check), the baseline of the Stackelberg mechanism.
+In silent and fr50 the script also runs the **perfect detector** (FedAvg that ignores the real
+free-riders): `--strategy fedavg --exclude-clients 0,1,2 --results-dir $dir/oracle` (`0,1,2,3,4` in fr50).
+In silent it also runs `fr0` (no free-riders) and `shapley_v02` (voting rate 0.2).
+
+- `full_data/`: Stackelberg where the clients accepted by the game train with all their data. This is the
+  Stackelberg of the main comparison, so the three mechanisms use the same data.
+- `shapley_v0/`: Shapley without exclusion (uniform weights), the baseline of the Shapley mechanism.
+- `control/`: FedAvg where every client trains on the amount of data it would choose in the
+  Stackelberg game, the baseline of the price-chosen Stackelberg.
+
+The raw JSON results (~23 MB) are not versioned in this repository.
 
 Run `python scripts/run_experiment.py --help` to see every option.
 
 ## Analyze
 
 ```bash
-python scripts/compare_runs.py results/*_seed*.json
-python scripts/summarize_results.py
-# other scenarios: add --results-dir results/fashion --dataset fashion-mnist
-python scripts/analyze_cm0.py results/stackelberg_seed*.json
+bash scripts/summarize_all.sh > results/resumo_geral.md
+python scripts/analyze_comparison.py > results/tabelas_comparacao.md
+python scripts/diagnose_shapley.py
+python scripts/analyze_cm0.py results/a05_silent/stackelberg_seed*.json
 ```
 
-- `compare_runs.py`: plots of accuracy, detection, precision/recall/F1 and reward distance in
-  `results/`.
-- `summarize_results.py`: every number of the thesis tables: accuracy, precision, recall and F1 of
-  every group, paired tests on the four metrics, the gain of the exclusion of each mechanism over
-  its own baseline, detection, reward distance and server time.
+- `summarize_all.sh` / `summarize_results.py`: every number of one scenario: accuracy, precision, recall
+  and F1, paired tests with Holm correction and d_z, detection, reward distance, Spearman correlation and
+  server time.
+- `analyze_comparison.py`: the comparison tables of the thesis (FedAvg × Shapley × Stackelberg with full
+  data) over the 8 scenarios, with 95% CI and Holm over all 192 tests.
+- `diagnose_shapley.py`: saturation and ties of the Shapley contributions, from the saved results.
 - `analyze_cm0.py`: range of the Stackelberg threshold Cm0 that gives exactly the same runs.
 
 ## Tests
