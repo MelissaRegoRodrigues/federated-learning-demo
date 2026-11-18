@@ -2,40 +2,47 @@
 
 ### Parte 1: escore do mecanismo × contribuição de referência (Spearman unilateral, ρ > 0)
 
-| α | cenário | mecanismo | clientes | n | ρ | p | p Holm (32 testes) |
-|---|---|---|---|---|---|---|---|
-| 0.5 | silent | shapley | todos | 50 | +0.78 | 9.0e-12 | 2.6e-10 |
-| 0.5 | silent | shapley | só honestos | 35 | +0.75 | 8.1e-08 | 1.9e-06 |
-| 0.5 | silent | stackelberg | todos | 50 | +0.55 | 1.8e-05 | 0.000 |
-| 0.5 | silent | stackelberg | só honestos | 35 | -0.28 | 0.947 | 1.000 |
-| 0.5 | low_effort | shapley | todos | 50 | +0.58 | 5.5e-06 | 0.000 |
-| 0.5 | low_effort | shapley | só honestos | 35 | +0.81 | 2.5e-09 | 6.3e-08 |
-| 0.5 | low_effort | stackelberg | todos | 50 | -0.11 | 0.767 | 1.000 |
-| 0.5 | low_effort | stackelberg | só honestos | 35 | -0.34 | 0.975 | 1.000 |
-| 0.5 | noisy | shapley | todos | 50 | +0.92 | 1.9e-21 | 6.1e-20 |
-| 0.5 | noisy | shapley | só honestos | 35 | +0.82 | 8.6e-10 | 2.3e-08 |
-| 0.5 | noisy | stackelberg | todos | 50 | +0.72 | 1.4e-09 | 3.7e-08 |
-| 0.5 | noisy | stackelberg | só honestos | 35 | +0.24 | 0.078 | 0.941 |
-| 0.5 | fr50 | shapley | todos | 50 | +0.88 | 1.1e-17 | 3.3e-16 |
-| 0.5 | fr50 | shapley | só honestos | 25 | +0.69 | 7.1e-05 | 0.001 |
-| 0.5 | fr50 | stackelberg | todos | 50 | +0.79 | 5.1e-12 | 1.5e-10 |
-| 0.5 | fr50 | stackelberg | só honestos | 25 | -0.48 | 0.992 | 1.000 |
-| 0.1 | silent | shapley | todos | 50 | +0.15 | 0.147 | 1.000 |
-| 0.1 | silent | shapley | só honestos | 35 | +0.24 | 0.083 | 0.941 |
-| 0.1 | silent | stackelberg | todos | 50 | +0.48 | 0.000 | 0.004 |
-| 0.1 | silent | stackelberg | só honestos | 35 | -0.48 | 0.998 | 1.000 |
-| 0.1 | low_effort | shapley | todos | 50 | +0.40 | 0.002 | 0.031 |
-| 0.1 | low_effort | shapley | só honestos | 35 | +0.47 | 0.002 | 0.031 |
-| 0.1 | low_effort | stackelberg | todos | 50 | -0.21 | 0.924 | 1.000 |
-| 0.1 | low_effort | stackelberg | só honestos | 35 | -0.08 | 0.686 | 1.000 |
-| 0.1 | noisy | shapley | todos | 50 | +0.63 | 5.5e-07 | 1.3e-05 |
-| 0.1 | noisy | shapley | só honestos | 35 | +0.54 | 0.000 | 0.007 |
-| 0.1 | noisy | stackelberg | todos | 50 | +0.62 | 7.7e-07 | 1.7e-05 |
-| 0.1 | noisy | stackelberg | só honestos | 35 | -0.05 | 0.619 | 1.000 |
-| 0.1 | fr50 | shapley | todos | 50 | +0.40 | 0.002 | 0.028 |
-| 0.1 | fr50 | shapley | só honestos | 25 | +0.32 | 0.062 | 0.810 |
-| 0.1 | fr50 | stackelberg | todos | 50 | +0.76 | 8.8e-11 | 2.5e-09 |
-| 0.1 | fr50 | stackelberg | só honestos | 25 | -0.69 | 1.000 | 1.000 |
+#### Teste principal da H4 (todos os clientes)
+
+| α | cenário | mecanismo | n | ρ | p | p Holm (16 testes) |
+|---|---|---|---|---|---|---|
+| 0.5 | silent | shapley | 50 | +0.78 | 9.0e-12 | 1.2e-10 |
+| 0.5 | silent | stackelberg | 50 | +0.55 | 1.8e-05 | 0.000 |
+| 0.5 | low_effort | shapley | 50 | +0.58 | 5.5e-06 | 4.4e-05 |
+| 0.5 | low_effort | stackelberg | 50 | -0.11 | 0.767 | 1.000 |
+| 0.5 | noisy | shapley | 50 | +0.92 | 1.9e-21 | 3.1e-20 |
+| 0.5 | noisy | stackelberg | 50 | +0.72 | 1.4e-09 | 1.6e-08 |
+| 0.5 | fr50 | shapley | 50 | +0.88 | 1.1e-17 | 1.6e-16 |
+| 0.5 | fr50 | stackelberg | 50 | +0.79 | 5.1e-12 | 7.1e-11 |
+| 0.1 | silent | shapley | 50 | +0.15 | 0.147 | 0.441 |
+| 0.1 | silent | stackelberg | 50 | +0.48 | 0.000 | 0.001 |
+| 0.1 | low_effort | shapley | 50 | +0.40 | 0.002 | 0.009 |
+| 0.1 | low_effort | stackelberg | 50 | -0.21 | 0.924 | 1.000 |
+| 0.1 | noisy | shapley | 50 | +0.63 | 5.5e-07 | 5.5e-06 |
+| 0.1 | noisy | stackelberg | 50 | +0.62 | 7.7e-07 | 6.9e-06 |
+| 0.1 | fr50 | shapley | 50 | +0.40 | 0.002 | 0.009 |
+| 0.1 | fr50 | stackelberg | 50 | +0.76 | 8.8e-11 | 1.1e-09 |
+
+#### Análise complementar (só honestos)
+
+| α | cenário | mecanismo | n | ρ | p | p Holm (16 testes) |
+|---|---|---|---|---|---|---|
+| 0.5 | silent | shapley | 35 | +0.75 | 8.1e-08 | 1.1e-06 |
+| 0.5 | silent | stackelberg | 35 | -0.28 | 0.947 | 1.000 |
+| 0.5 | low_effort | shapley | 35 | +0.81 | 2.5e-09 | 3.8e-08 |
+| 0.5 | low_effort | stackelberg | 35 | -0.34 | 0.975 | 1.000 |
+| 0.5 | noisy | shapley | 35 | +0.82 | 8.6e-10 | 1.4e-08 |
+| 0.5 | noisy | stackelberg | 35 | +0.24 | 0.078 | 0.706 |
+| 0.5 | fr50 | shapley | 25 | +0.69 | 7.1e-05 | 0.001 |
+| 0.5 | fr50 | stackelberg | 25 | -0.48 | 0.992 | 1.000 |
+| 0.1 | silent | shapley | 35 | +0.24 | 0.083 | 0.706 |
+| 0.1 | silent | stackelberg | 35 | -0.48 | 0.998 | 1.000 |
+| 0.1 | low_effort | shapley | 35 | +0.47 | 0.002 | 0.023 |
+| 0.1 | low_effort | stackelberg | 35 | -0.08 | 0.686 | 1.000 |
+| 0.1 | noisy | shapley | 35 | +0.54 | 0.000 | 0.005 |
+| 0.1 | noisy | stackelberg | 35 | -0.05 | 0.619 | 1.000 |
+| 0.1 | fr50 | shapley | 25 | +0.32 | 0.062 | 0.623 |
+| 0.1 | fr50 | stackelberg | 25 | -0.69 | 1.000 | 1.000 |
 
 ### Parte 2: distância da recompensa à referência (menor = mais proporcional)
 

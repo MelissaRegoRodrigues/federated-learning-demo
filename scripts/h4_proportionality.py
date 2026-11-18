@@ -1,13 +1,14 @@
-"""Teste da H4b: o escore de contribuicao de cada mecanismo cresce com a contribuicao de referencia?
+"""Teste da H4: o escore de contribuicao de cada mecanismo cresce com a contribuicao de referencia?
 
 Contribuicao de referencia (a mesma de flapp.fairness.reference_shares): 0 para os free-riders e, para os
 honestos, a fracao dos dados honestos que o cliente tem. Unidade = cliente x semente.
 
 Parte 1 (escore): Spearman unilateral (rho > 0) entre o escore medio do cliente nas rodadas de treino
-(phi do Shapley; Cm do Stackelberg com dados completos) e a referencia. Duas versoes:
-  - todos os clientes: mistura a separacao free-rider x honesto (a H4a) com a proporcionalidade;
-  - so honestos: e a proporcionalidade propriamente dita (mais dados -> escore maior?).
-Holm sobre os 32 testes (8 cenarios x 2 mecanismos x 2 versoes).
+(phi do Shapley; Cm do Stackelberg com dados completos) e a referencia.
+  - teste principal da H4: todos os clientes (free-riders devem ficar embaixo e, entre os honestos,
+    quem tem mais dados deve ficar acima);
+  - analise complementar: so honestos, para ver se a ordem entre honestos acompanha os dados.
+Holm sobre os 16 testes de cada versao (8 cenarios x 2 mecanismos), em familias separadas.
 
 Parte 2 (recompensa): distancia quadratica entre a parcela de recompensa acumulada e a referencia
 (menor = mais proporcional). FedAvg nao paga: a parcela dele e o peso de agregacao (proporcional aos
@@ -123,15 +124,18 @@ def main():
             tests = [paired_t(distances[a], distances[b]) for a, b in PAIRS]
             distance_rows.append((alpha, attack, means, tests))
 
-    score_adjusted = sr.holm_adjust([row[5] for row in score_rows])
     print("<!-- Gerado por scripts/h4_proportionality.py. Unidade = cliente x semente. -->")
-    print("\n### Parte 1: escore do mecanismo × contribuição de referência (Spearman unilateral, ρ > 0)\n")
-    print("| α | cenário | mecanismo | clientes | n | ρ | p | p Holm (32 testes) |")
-    print("|---|---|---|---|---|---|---|---|")
-    for (alpha, attack, mechanism, honest_only, rho, p_value, n), p_holm in zip(score_rows, score_adjusted):
-        group = "só honestos" if honest_only else "todos"
-        rho_text = "n/a" if rho != rho else f"{rho:+.2f}"
-        print(f"| {alpha} | {attack} | {mechanism} | {group} | {n} | {rho_text} | {format_p(p_value)} | {format_p(p_holm)} |")
+    print("\n### Parte 1: escore do mecanismo × contribuição de referência (Spearman unilateral, ρ > 0)")
+    titles = {False: "Teste principal da H4 (todos os clientes)", True: "Análise complementar (só honestos)"}
+    for honest_only in [False, True]:
+        rows = [row for row in score_rows if row[3] == honest_only]
+        adjusted = sr.holm_adjust([row[5] for row in rows])
+        print(f"\n#### {titles[honest_only]}\n")
+        print("| α | cenário | mecanismo | n | ρ | p | p Holm (16 testes) |")
+        print("|---|---|---|---|---|---|---|")
+        for (alpha, attack, mechanism, _, rho, p_value, n), p_holm in zip(rows, adjusted):
+            rho_text = "n/a" if rho != rho else f"{rho:+.2f}"
+            print(f"| {alpha} | {attack} | {mechanism} | {n} | {rho_text} | {format_p(p_value)} | {format_p(p_holm)} |")
 
     all_p = [p for _, _, _, tests in distance_rows for _, p in tests]
     distance_adjusted = iter(sr.holm_adjust(all_p))
