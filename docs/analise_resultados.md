@@ -200,6 +200,34 @@ O Stackelberg zera a recompensa dos free-riders onde os detecta (silent e fr50).
 
 O Shapley custa de **1.340 a 1.940 vezes** o FedAvg e de 30 a 48 vezes o Stackelberg (o máximo é no fr50). O custo bate com o código: o leave-one-out faz N + 1 = 11 avaliações por rodada (a coalizão completa e uma sem cada cliente), sobre as 6.000 amostras de validação. Uma avaliação da rede pequena leva de 0,54 a 0,77 s (tempo medido ÷ 11; 0,72 s medido isoladamente no mesmo ambiente), o que dá 6,0 a 8,4 s por rodada. A estimativa antiga de 1,08 s por avaliação (11 × 1,08 ≈ 11,9 s) era da rede grande (421.642 parâmetros; 1,33 s medido isoladamente) e foi corrigida em `docs/formulas.md`. A diferença é significativa em todos os cenários.
 
+### 5.1 H4: identificação proporcional à contribuição
+
+Como estava escrita ("os mecanismos identificam os free-riders de forma proporcional à contribuição real"), a H4 não é testável: "contribuição real" não tinha medida, e identificar é uma decisão sim/não, que não pode ser "proporcional". Ela foi reescrita em duas partes, ambas testadas sem novas execuções. A **contribuição de referência** é a de `flapp.fairness.reference_shares`: 0 para free-riders e, para honestos, a fração dos dados honestos que o cliente tem. Essa referência mede **quantidade** de dados, não qualidade; é uma aproximação da contribuição real.
+
+- **H4a (identificação):** os mecanismos sinalizam free-riders com frequência maior que honestos. Critério: Fisher unilateral, p Holm < 0,05. Resultado na seção 4: confirmada para o Stackelberg só em silent e fr50; para o Shapley em 5 de 8 cenários (não no silent, nem no low-effort com α=0,5).
+- **H4b (proporcionalidade):** o escore que o mecanismo atribui ao cliente (φ no Shapley; Cm no Stackelberg) cresce com a contribuição de referência. Critério: Spearman unilateral (ρ > 0) entre o escore médio do cliente nas rodadas de treino e a referência, unidade cliente × semente, p Holm < 0,05 (32 testes). A versão **só com honestos** é a que mede proporcionalidade; a versão com todos os clientes mistura a separação free-rider × honesto, que já é a H4a.
+
+Resultados (`scripts/h4_proportionality.py`, tabela completa em `results/h4_proporcionalidade.md`), ρ só entre honestos:
+
+| Cenário | Shapley (φ): ρ (p Holm) | Stackelberg (Cm): ρ (p Holm) |
+|---|---|---|
+| α=0,5 silent | **+0,75** (2·10⁻⁶) | −0,28 (1) |
+| α=0,5 low-effort | **+0,81** (6·10⁻⁸) | −0,34 (1) |
+| α=0,5 noisy | **+0,82** (2·10⁻⁸) | +0,24 (0,94) |
+| α=0,5 fr50 | **+0,69** (0,001) | −0,48 (1) |
+| α=0,1 silent | +0,24 (0,94) | −0,48 (1) |
+| α=0,1 low-effort | **+0,47** (0,031) | −0,08 (1) |
+| α=0,1 noisy | **+0,54** (0,007) | −0,05 (1) |
+| α=0,1 fr50 | +0,32 (0,81) | −0,69 (1) |
+
+**Leitura.**
+- **Shapley:** o φ cresce com os dados do honesto em 6 de 8 cenários (todos com α=0,5; low-effort e noisy com α=0,1). Isso é coerente com a seção 4: o mesmo efeito, visto pelo outro lado, é a tendência de sinalizar mais os honestos com poucos dados (Spearman negativo da taxa de sinalização). O escore do Shapley é proporcional à quantidade de dados, mas isso não se converte em boa identificação de free-riders no silent.
+- **Stackelberg:** o Cm **não** cresce com a contribuição em nenhum cenário (ρ entre honestos de −0,69 a +0,24, quase sempre negativo). O Cm mede compatibilidade entre gradientes, não contribuição; com a versão "todos os clientes" ele só fica positivo onde separa os free-riders (silent, fr50 e, sem cruzar o limiar, noisy).
+- **Recompensa (parte 2 da tabela completa):** a distância da recompensa do Stackelberg à referência é **0,000** em silent e fr50, mas isso é **por construção, não um resultado**: o pagamento é preço × dados, a mesma regra da referência, então, excluídos os free-riders, a parcela é exatamente a referência. Depois do Holm (24 testes), só uma diferença de distância é significativa (Stackelberg − FedAvg no fr50 com α=0,5, Holm 0,014).
+- **Ressalva estatística:** os clientes de uma mesma semente compartilham a partição e o modelo global, então as unidades cliente × semente não são totalmente independentes, e os p são otimistas.
+
+**Veredito.** A H4 como foi escrita não se sustenta. Na forma testável: a H4a vale para o Stackelberg só contra atualização nula e para o Shapley de forma fraca; a H4b vale para o **escore** do Shapley (em 6 de 8 cenários) e **não vale** para o do Stackelberg. A proporcionalidade da recompensa do Stackelberg é consequência da regra de pagamento, não algo que o experimento demonstra.
+
 ## 6. Stackelberg: dados completos × dados escolhidos pelo preço
 
 A coluna principal usa dados completos para que os três mecanismos treinem com a mesma quantidade de dados. O Stackelberg como definido na literatura [29] deixa cada cliente escolher a quantidade de dados que treina (resposta ótima ao preço). A tabela abaixo mostra as duas variantes lado a lado. **Os pagamentos só são comparáveis dentro da mesma variante:** na de dados completos o pagamento é calculado sobre dados que o cliente não escolheu, então não representa o equilíbrio do jogo.
@@ -299,6 +327,7 @@ bash scripts/run_all.sh shapley_loss   # ablação opcional: Shapley com perda (
 bash scripts/summarize_all.sh > results/resumo_geral.md
 python scripts/analyze_comparison.py > results/tabelas_comparacao.md
 python scripts/fisher_detection.py > results/fisher_deteccao.md
+python scripts/h4_proportionality.py > results/h4_proporcionalidade.md
 pytest tests/
 ```
 

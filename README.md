@@ -92,6 +92,7 @@ Run `python scripts/run_experiment.py --help` to see every option.
 bash scripts/summarize_all.sh > results/resumo_geral.md
 python scripts/analyze_comparison.py > results/tabelas_comparacao.md
 python scripts/fisher_detection.py > results/fisher_deteccao.md
+python scripts/h4_proportionality.py > results/h4_proporcionalidade.md
 python scripts/diagnose_shapley.py
 python scripts/analyze_cm0.py results/a05_silent/stackelberg_seed*.json
 ```
@@ -103,6 +104,8 @@ python scripts/analyze_cm0.py results/a05_silent/stackelberg_seed*.json
   data) over the 8 scenarios, with 95% CI and Holm over all 192 tests.
 - `fisher_detection.py`: Fisher exact test of the detection (free-rider × flagged) for Shapley and
   Stackelberg in the 8 scenarios, with Holm.
+- `h4_proportionality.py`: H4 test: Spearman between each mechanism's client score and the reference
+  contribution, and distance of the rewards to that reference, with Holm.
 - `diagnose_shapley.py`: saturation and ties of the Shapley contributions, from the saved results.
 - `analyze_cm0.py`: range of the Stackelberg threshold Cm0 that gives exactly the same runs.
 
